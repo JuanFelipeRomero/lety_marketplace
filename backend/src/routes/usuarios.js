@@ -50,7 +50,7 @@ router.post(
     } = req.body;
 
     const fotoMascotaFile = req.files?.petPhoto?.[0];
-    const historialMedicoFile = req.files.petHistory?.[0];
+    const historialMedicoFile = req.files?.petHistory?.[0];
 
     console.log("Foto mascota file:", fotoMascotaFile);
     console.log("Historial médico file:", historialMedicoFile);
@@ -356,10 +356,12 @@ router.post("/usuarios/review", autenticacionToken, async (req, res) => {
 
 // Obtener perfil del usuario autenticado
 router.get("/profile", autenticacionToken, async (req, res) => {
-    const userId = req.user?.userId;
+  const userId = req.user?.userId;
 
   if (!userId) {
-    return res.status(400).json({ message: "ID de usuario no proporcionado en el token." });
+    return res
+      .status(400)
+      .json({ message: "ID de usuario no proporcionado en el token." });
   }
 
   try {
@@ -371,7 +373,9 @@ router.get("/profile", autenticacionToken, async (req, res) => {
 
     if (error) {
       console.error("Error al obtener usuario:", error);
-      return res.status(400).json({ message: "Error al obtener el perfil del usuario" });
+      return res
+        .status(400)
+        .json({ message: "Error al obtener el perfil del usuario" });
     }
 
     return res.status(200).json({
