@@ -20,4 +20,17 @@ export default {
   clearMocks: true,
   resetMocks: true,
   restoreMocks: true,
+  // AÑADE ESTA SECCIÓN
+  reporters: [
+    "default",
+    [
+      "jest-html-reporters",
+      {
+        publicPath: "./test-results/html-report",
+        filename: "report.html",
+        expand: true,
+        pageTitle: "Reporte de Pruebas - Lety Marketplace",
+      },
+    ],
+  ],
 };

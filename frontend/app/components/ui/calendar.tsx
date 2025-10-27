@@ -9,49 +9,73 @@ import "react-day-picker/style.css";
 
 export type CalendarProps = React.ComponentProps<typeof DayPicker>
 
-function Calendar({ className, classNames,  ...props }: CalendarProps) {
+function Calendar({ className, classNames, showOutsideDays = true, ...props }: CalendarProps) {
   return (
     <DayPicker
-      //showOutsideDays={showOutsideDays}
-      className={cn("p-3", className)}
+      showOutsideDays={showOutsideDays}
+      className={cn("p-4 w-full", className)}
       locale={es}
       weekStartsOn={1}
       classNames={{
-        months: "flex flex-col sm:flex-row space-y-4 sm:space-x-4 sm:space-y-0",
-        month: "space-y-4",
-        caption: "flex justify-center pt-1 relative items-center",
-        caption_label: "text-sm font-medium",
+        months: "flex flex-col sm:flex-row space-y-4 sm:space-x-4 sm:space-y-0 justify-center",
+        month: "space-y-4 w-full",
+        month_caption: "flex justify-center pt-1 relative items-center mb-3",
+        caption_label: "text-base font-semibold text-foreground",
         nav: "space-x-1 flex items-center",
-        nav_button: cn(
+        button_previous: cn(
           buttonVariants({ variant: "outline" }),
-          "h-7 w-7 bg-transparent p-0 opacity-50 hover:opacity-100",
+          "h-8 w-8 bg-transparent p-0 opacity-80 hover:opacity-100 hover:bg-accent transition-all",
+          "absolute left-1"
         ),
-        nav_button_previous: "absolute left-1",
-        nav_button_next: "absolute right-1",
-        table: "w-full border-collapse space-y-1",
-        head_row: "flex",
-        head_cell: "text-muted-foreground rounded-md w-9 font-normal text-[0.8rem]",
-        row: "flex w-full mt-2",
-        cell: "h-9 w-9 text-center text-sm p-0 relative [&:has([aria-selected].day-range-end)]:rounded-r-md [&:has([aria-selected].day-outside)]:bg-accent/50 [&:has([aria-selected])]:bg-accent first:[&:has([aria-selected])]:rounded-l-md last:[&:has([aria-selected])]:rounded-r-md focus-within:relative focus-within:z-20",
-        day: cn(buttonVariants({ variant: "ghost" }), "h-9 w-9 p-0 font-normal aria-selected:opacity-100"),
-        day_range_end: "day-range-end",
-        day_selected:
-          "bg-primary text-primary-foreground hover:bg-primary hover:text-primary-foreground focus:bg-primary focus:text-primary-foreground rounded-full",
-        day_today: "bg-accent text-accent-foreground rounded-full",
-        day_outside:
-          "day-outside text-muted-foreground opacity-50 aria-selected:bg-accent/50 aria-selected:text-muted-foreground aria-selected:opacity-30",
-        day_disabled: "text-muted-foreground opacity-50",
-        day_range_middle: "aria-selected:bg-accent aria-selected:text-accent-foreground",
-        day_hidden: "invisible",
+        button_next: cn(
+          buttonVariants({ variant: "outline" }),
+          "h-8 w-8 bg-transparent p-0 opacity-80 hover:opacity-100 hover:bg-accent transition-all",
+          "absolute right-1"
+        ),
+        month_grid: "w-full border-collapse mt-2",
+        weekdays: "flex justify-between w-full mb-1",
+        weekday: "text-muted-foreground rounded-md font-medium text-xs flex-1 flex items-center justify-center h-9 w-9",
+        week: "flex w-full mt-1 justify-between",
+        day: cn(
+          "relative p-0 text-center text-sm flex-1 flex items-center justify-center",
+          "focus-within:relative focus-within:z-20"
+        ),
+        day_button: cn(
+          buttonVariants({ variant: "ghost" }),
+          "h-10 w-10 p-0 font-normal",
+          "hover:bg-accent hover:text-accent-foreground hover:scale-105",
+          "aria-selected:hover:bg-primary aria-selected:hover:brightness-110 aria-selected:hover:shadow-lg aria-selected:hover:scale-110",
+          "rounded-lg transition-all duration-200 ease-in-out",
+          "focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
+        ),
+        range_end: "day-range-end",
+        selected: cn(
+          "bg-primary text-primary-foreground font-semibold",
+          "hover:bg-primary hover:text-primary-foreground hover:brightness-110 hover:shadow-lg hover:scale-110",
+          "focus:bg-primary focus:text-primary-foreground",
+          "rounded-lg shadow-md scale-105",
+          "transition-all duration-200 ease-in-out"
+        ),
+        today: cn(
+          "bg-accent text-accent-foreground font-bold",
+          "rounded-lg ring-2 ring-primary ring-offset-2"
+        ),
+        outside: cn(
+          "day-outside text-muted-foreground opacity-40",
+          "aria-selected:bg-accent/50 aria-selected:text-muted-foreground aria-selected:opacity-30"
+        ),
+        disabled: "text-muted-foreground opacity-40 cursor-not-allowed hover:bg-transparent hover:scale-100",
+        range_middle: "aria-selected:bg-accent aria-selected:text-accent-foreground",
+        hidden: "invisible",
         ...classNames,
       }}
       components={{
-        Chevron: (props) => {
-            if (props.orientation === "left") {
-                return <ChevronLeft {...props} />;
-            }
-            return <ChevronRight {...props} />;
-            },
+        Chevron: ({ orientation }) => {
+          if (orientation === "left") {
+            return <ChevronLeft className="h-4 w-4" />;
+          }
+          return <ChevronRight className="h-4 w-4" />;
+        },
       }}
       {...props}
     />
@@ -60,4 +84,3 @@ function Calendar({ className, classNames,  ...props }: CalendarProps) {
 Calendar.displayName = "Calendar"
 
 export { Calendar }
-
