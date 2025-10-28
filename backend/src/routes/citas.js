@@ -11,6 +11,10 @@ import {
   validateTimeSlotGranularity,
   checkAppointmentConflicts,
 } from "../utils/appointmentValidation.js";
+import {
+  MercadoPagoPreferenceService,
+  MercadoPagoUtils,
+} from "../services/mercadopago.js";
 
 dotenv.config();
 
@@ -552,6 +556,91 @@ router.put("/appointments/:appointmentId/status", async (req, res) => {
       });
     }
 
+    // 🔥 NUEVO: Si la cita se confirma, crear preferencia de pago
+    let paymentUrl = null;
+    if (status === "confirmada") {
+      try {
+        // Obtener información adicional necesaria para el pago
+        const { data: citaCompleta, error: errorCitaCompleta } = await supabase
+          .from("citas")
+          .select(`
+            id_cita,
+            id_usuario,
+            servicios(nombre, precio),
+            usuarios(nombre, correo),
+            clinicas(
+              nombre,
+              mercadopago_access_token,
+              mercadopago_public_key,
+              mp_connected
+            )
+          `)
+          .eq("id_cita", appointmentId)
+          .single();
+
+        if (errorCitaCompleta || !citaCompleta) {
+          console.warn("No se pudo obtener información completa de la cita para pago");
+        } else if (citaCompleta.clinicas?.mp_connected && citaCompleta.clinicas?.mercadopago_access_token) {
+          // La clínica tiene Mercado Pago configurado
+
+          // Obtener configuración de comisión de plataforma
+          const { data: configComision } = await supabase
+            .from('configuracion_plataforma')
+            .select('valor')
+            .eq('clave', 'commission_percentage')
+            .single();
+
+          const commissionPercentage = configComision?.valor ? parseFloat(configComision.valor) : 10;
+
+          // Calcular montos
+          const serviceAmount = parseFloat(citaCompleta.servicios.precio);
+          const marketplaceFee = MercadoPagoUtils.calculateMarketplaceFee(
+            serviceAmount,
+            commissionPercentage
+          );
+
+          // Crear preferencia de pago
+          const preference = await MercadoPagoPreferenceService.createPreference({
+            sellerAccessToken: citaCompleta.clinicas.mercadopago_access_token,
+            appointmentId: citaCompleta.id_cita,
+            title: citaCompleta.servicios.nombre,
+            amount: serviceAmount,
+            marketplaceFee: marketplaceFee,
+            payer: {
+              name: citaCompleta.usuarios.nombre,
+              email: citaCompleta.usuarios.correo,
+            },
+            clinic: {
+              id: clinicaId,
+              nombre: citaCompleta.clinicas.nombre,
+            },
+          });
+
+          // Actualizar cita con información de pago
+          await supabase
+            .from("citas")
+            .update({
+              payment_status: 'awaiting_payment',
+              preference_id: preference.id,
+              payment_url: preference.init_point,
+              payment_amount: serviceAmount,
+              marketplace_fee: marketplaceFee,
+            })
+            .eq("id_cita", appointmentId);
+
+          paymentUrl = preference.init_point;
+
+          console.log(`✅ Payment preference created for appointment ${appointmentId}`);
+        } else {
+          console.warn(`⚠️ Clinic ${clinicaId} does not have Mercado Pago connected - skipping payment`);
+        }
+      } catch (paymentError) {
+        console.error("Error creating payment preference:", paymentError);
+        // No bloqueamos la confirmación si falla el pago
+        // La cita se confirma de todas formas
+      }
+    }
+
     // TODO: Aquí se podría implementar el envío de notificaciones al cliente
 
     return res.status(200).json({
@@ -562,6 +651,7 @@ router.put("/appointments/:appointmentId/status", async (req, res) => {
           ? "rechazada"
           : "marcada para reprogramación"
       } exitosamente`,
+      payment_url: paymentUrl, // Incluir URL de pago si se creó
     });
   } catch (error) {
     console.error("Error general actualizando estado de cita:", error);

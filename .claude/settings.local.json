@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__supabase__list_projects",
+      "mcp__supabase__execute_sql",
+      "WebFetch(domain:ui.shadcn.com)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router";
-import { Check, ChevronRight, Clock, PawPrint, AlertCircle, Loader2, CalendarDays, X, CheckCircle2, XCircle, AlertTriangle } from "lucide-react";
+import { Check, ChevronRight, Clock, PawPrint, AlertCircle, Loader2, CalendarDays, X, CheckCircle2, XCircle, AlertTriangle, CreditCard, Info } from "lucide-react";
 import { Button } from "~/components/ui/button";
 import { Calendar } from "~/components/ui/calendar";
 import { Card, CardContent, CardHeader, CardTitle } from "~/components/ui/card";
@@ -1074,6 +1074,24 @@ export function AppointmentScheduler({ clinicId }: AppointmentSchedulerProps) {
                 </RadioGroup>
               </div>
 
+              {/* Payment Disclaimer */}
+              <Alert className="border-primary/50 bg-primary/5">
+                <CreditCard className="h-4 w-4" />
+                <AlertDescription>
+                  <strong>Pago tras confirmación:</strong> Una vez que la veterinaria confirme tu cita,
+                  recibirás un link de pago seguro por Mercado Pago. Tu cita quedará reservada
+                  definitivamente después de completar el pago.
+                </AlertDescription>
+              </Alert>
+
+              <Alert>
+                <Info className="h-4 w-4" />
+                <AlertDescription>
+                  <strong>Política de reembolso:</strong> Reembolso completo al cancelar con 24 horas
+                  o más de anticipación. Cancelaciones tardías pueden estar sujetas a cargos.
+                </AlertDescription>
+              </Alert>
+
               <div className="flex items-start space-x-2 pt-4">
                 <Checkbox
                   id="terms"
@@ -1086,8 +1104,9 @@ export function AppointmentScheduler({ clinicId }: AppointmentSchedulerProps) {
                   htmlFor="terms"
                   className="text-sm leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
                 >
-                  Acepto los términos y condiciones de la clínica veterinaria y autorizo
-                  el tratamiento de mis datos personales
+                  Acepto los términos y condiciones de la clínica veterinaria, autorizo
+                  el tratamiento de mis datos personales y comprendo que debo completar el pago
+                  para confirmar definitivamente mi cita.
                 </label>
               </div>
             </div>

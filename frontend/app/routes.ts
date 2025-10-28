@@ -23,6 +23,10 @@ export default [
       "dashboard-vet/services",
       "routes/DashboardVet/ServicesVet/index.tsx"
     ), // Ruta para general information
+    route(
+      "dashboard-vet/mercadopago-setup",
+      "routes/dashboard-vet/mercadopago-setup.tsx"
+    ), // Ruta para configuración de Mercado Pago
   ]),
   layout("layouts/DashboardLayoutClient/index.tsx", [
     route("dashboard-client", "routes/DashboardClient/index.tsx"),
@@ -41,6 +45,10 @@ export default [
     route(
       "dashboard-client/appointments/:id",
       "routes/DashboardClient/Citas/ID_citas/id-schedule.tsx"
+    ),
+    route(
+      "dashboard-client/appointments/:id/payment",
+      "routes/dashboard-client/appointments/$id/payment.tsx"
     ),
     route(
       "dashboard-client/appointment/:id/reschedule",
