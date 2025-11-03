@@ -3,7 +3,13 @@
     "allow": [
       "mcp__supabase__list_projects",
       "mcp__supabase__execute_sql",
-      "WebFetch(domain:ui.shadcn.com)"
+      "WebFetch(domain:ui.shadcn.com)",
+      "Bash(cat:*)",
+      "WebFetch(domain:www.mercadopago.com.co)",
+      "WebSearch",
+      "mcp__mercadopago__quality_checklist",
+      "mcp__mercadopago__search_documentation",
+      "Bash(npx shadcn@latest add:*)"
     ],
     "deny": [],
     "ask": []

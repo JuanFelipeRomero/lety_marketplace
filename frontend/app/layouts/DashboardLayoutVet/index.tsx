@@ -14,6 +14,7 @@ import {
   Users,
   BarChart2,
   Loader2,
+  Wallet,
 } from "lucide-react";
 import { Button } from "~/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "~/components/ui/avatar";
@@ -101,6 +102,11 @@ export default function DashboardLayout() {
       title: "Citas",
       href: "/dashboard-vet/appointments",
       icon: <Calendar className="h-4 w-4" />,
+    },
+    {
+      title: "Ganancias",
+      href: "/dashboard-vet/earnings",
+      icon: <Wallet className="h-4 w-4" />,
     },
     {
       title: "Estadísticas",

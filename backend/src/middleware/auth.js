@@ -13,7 +13,11 @@ const autenticacionToken = (req, res, next) => {
   console.log(`[Auth Middleware] Full URL: ${req.originalUrl}`);
 
   // List of path prefixes to exclude from authentication
-  const excludedPaths = ["/api/places/autocomplete", "/api/places/details"];
+  const excludedPaths = [
+    "/api/places/autocomplete",
+    "/api/places/details",
+    "/payments/webhook"  // Mercado Pago webhooks don't send JWT tokens
+  ];
 
   // Check if the request path matches any of the excluded paths
   const isExcluded = excludedPaths.some(

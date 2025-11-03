@@ -1,109 +1,33 @@
 import pkg from 'mercadopago';
-const { MercadoPagoConfig, Preference, Payment, OAuth, Refund } = pkg;
+const { MercadoPagoConfig, Preference, Payment, Refund } = pkg;
+import crypto from 'crypto';
 import dotenv from 'dotenv';
 
 dotenv.config();
 
 /**
- * Mercado Pago Service
- * Handles all interactions with the Mercado Pago API including:
- * - OAuth authentication for marketplace sellers
- * - Payment preference creation
- * - Payment queries and refunds
- * - Split payments with marketplace fees
+ * Mercado Pago Service - Simplified Version
+ *
+ * This service handles all interactions with Mercado Pago API for a SIMPLE payment flow:
+ * - All payments go to the PLATFORM's Mercado Pago account (not individual clinics)
+ * - Platform tracks internally what is owed to each clinic
+ * - No OAuth or marketplace split payments
+ * - Simplified for educational/demo purposes
+ *
+ * Flow:
+ * 1. Customer books appointment → Platform creates payment preference
+ * 2. Customer pays → Money goes to platform's MP account
+ * 3. Webhook confirms payment → Platform records debt to clinic in veterinary_earnings table
+ * 4. Platform pays clinics manually (outside of Mercado Pago integration)
  */
 
-// Initialize Mercado Pago client with marketplace credentials
+// Initialize Mercado Pago client with PLATFORM credentials
 const client = new MercadoPagoConfig({
   accessToken: process.env.MP_ACCESS_TOKEN,
   options: {
     timeout: 5000,
-    idempotencyKey: 'unique-key', // This will be overridden per request
   }
 });
-
-/**
- * OAuth Service for Marketplace Integration
- * Handles seller authorization flow
- */
-export class MercadoPagoOAuthService {
-  /**
-   * Generate OAuth authorization URL for sellers
-   * @param {string} state - Random state for CSRF protection
-   * @returns {string} Authorization URL
-   */
-  static getAuthorizationURL(state) {
-    const clientId = process.env.MP_CLIENT_ID;
-    const redirectUri = process.env.MP_REDIRECT_URI;
-
-    return `https://auth.mercadopago.com.co/authorization?client_id=${clientId}&response_type=code&platform_id=mp&state=${state}&redirect_uri=${encodeURIComponent(redirectUri)}`;
-  }
-
-  /**
-   * Exchange authorization code for access token
-   * @param {string} code - Authorization code from callback
-   * @returns {Promise<Object>} Token response with access_token, refresh_token, etc.
-   */
-  static async getAccessToken(code) {
-    try {
-      const oauth = new OAuth(client);
-
-      const response = await oauth.create({
-        body: {
-          client_secret: process.env.MP_CLIENT_SECRET,
-          client_id: process.env.MP_CLIENT_ID,
-          grant_type: 'authorization_code',
-          code: code,
-          redirect_uri: process.env.MP_REDIRECT_URI,
-        }
-      });
-
-      return {
-        access_token: response.access_token,
-        refresh_token: response.refresh_token,
-        public_key: response.public_key,
-        user_id: response.user_id,
-        expires_in: response.expires_in, // Seconds until expiration (usually 15552000 = 180 days)
-        token_type: response.token_type,
-      };
-    } catch (error) {
-      console.error('Error exchanging code for token:', error);
-      throw new Error('Failed to obtain access token from Mercado Pago');
-    }
-  }
-
-  /**
-   * Refresh an expired access token
-   * @param {string} refreshToken - Refresh token
-   * @returns {Promise<Object>} New token response
-   */
-  static async refreshAccessToken(refreshToken) {
-    try {
-      const oauth = new OAuth(client);
-
-      const response = await oauth.create({
-        body: {
-          client_secret: process.env.MP_CLIENT_SECRET,
-          client_id: process.env.MP_CLIENT_ID,
-          grant_type: 'refresh_token',
-          refresh_token: refreshToken,
-        }
-      });
-
-      return {
-        access_token: response.access_token,
-        refresh_token: response.refresh_token,
-        public_key: response.public_key,
-        user_id: response.user_id,
-        expires_in: response.expires_in,
-        token_type: response.token_type,
-      };
-    } catch (error) {
-      console.error('Error refreshing token:', error);
-      throw new Error('Failed to refresh access token');
-    }
-  }
-}
 
 /**
  * Payment Preference Service
@@ -113,33 +37,77 @@ export class MercadoPagoPreferenceService {
   /**
    * Create a payment preference for an appointment
    * @param {Object} params - Preference parameters
-   * @param {string} params.sellerAccessToken - Clinic's Mercado Pago access token
    * @param {number} params.appointmentId - Appointment ID
    * @param {string} params.title - Service name
-   * @param {number} params.amount - Total amount
-   * @param {number} params.marketplaceFee - Platform commission
-   * @param {Object} params.payer - Payer information (email, name)
-   * @param {Object} params.clinic - Clinic information
+   * @param {number} params.amount - Total amount (what customer pays)
+   * @param {Object} params.payer - Payer information (email, first_name, last_name, phone, identification, address)
+   * @param {Object} params.clinic - Clinic information (for reference)
    * @returns {Promise<Object>} Preference with init_point URL
    */
   static async createPreference(params) {
     const {
-      sellerAccessToken,
       appointmentId,
       title,
       amount,
-      marketplaceFee,
       payer,
       clinic,
     } = params;
 
-    try {
-      // Create client with seller's access token
-      const sellerClient = new MercadoPagoConfig({
-        accessToken: sellerAccessToken,
-      });
+    // Validate required environment variables
+    if (!process.env.FRONTEND_URL || !process.env.BACKEND_URL) {
+      console.error('❌ Missing environment variables:');
+      console.error('  FRONTEND_URL:', process.env.FRONTEND_URL);
+      console.error('  BACKEND_URL:', process.env.BACKEND_URL);
+      throw new Error('FRONTEND_URL and BACKEND_URL environment variables must be set');
+    }
 
-      const preference = new Preference(sellerClient);
+    console.log('✅ Creating payment preference with URLs:');
+    console.log('  FRONTEND_URL:', process.env.FRONTEND_URL);
+    console.log('  BACKEND_URL:', process.env.BACKEND_URL);
+
+    try {
+      const preference = new Preference(client);
+
+      // Build payer object with all available fields
+      const payerData = {
+        email: payer.email,
+      };
+
+      // Add name fields (split from full name if needed)
+      if (payer.first_name && payer.last_name) {
+        payerData.name = payer.first_name;
+        payerData.surname = payer.last_name;
+      } else if (payer.name) {
+        // Fallback: split full name into first and last
+        const nameParts = payer.name.trim().split(' ');
+        payerData.name = nameParts[0];
+        payerData.surname = nameParts.slice(1).join(' ') || nameParts[0];
+      }
+
+      // Add phone if available
+      if (payer.phone) {
+        payerData.phone = {
+          area_code: '',
+          number: payer.phone,
+        };
+      }
+
+      // Add identification if available
+      if (payer.identification && payer.identification.type && payer.identification.number) {
+        payerData.identification = {
+          type: payer.identification.type, // CC, CE, TI, PA, etc.
+          number: payer.identification.number,
+        };
+      }
+
+      // Add address if available
+      if (payer.address) {
+        payerData.address = {
+          street_name: payer.address.street_name || payer.address.direccion || '',
+          street_number: payer.address.street_number || '',
+          zip_code: payer.address.zip_code || payer.address.codigo_postal || '',
+        };
+      }
 
       const preferenceData = {
         items: [
@@ -147,34 +115,67 @@ export class MercadoPagoPreferenceService {
             id: `appointment_${appointmentId}`,
             title: title,
             description: `Cita veterinaria en ${clinic.nombre}`,
+            category_id: 'services', // Required for quality checklist
             quantity: 1,
             unit_price: amount,
             currency_id: 'COP', // Colombian Peso
           }
         ],
-        payer: {
-          name: payer.name,
-          email: payer.email,
-        },
+        payer: payerData,
         back_urls: {
-          success: `${process.env.FRONTEND_URL}/dashboard-client/appointments/${appointmentId}/payment/success`,
-          failure: `${process.env.FRONTEND_URL}/dashboard-client/appointments/${appointmentId}/payment/failure`,
-          pending: `${process.env.FRONTEND_URL}/dashboard-client/appointments/${appointmentId}/payment/pending`,
+          success: `${process.env.FRONTEND_URL}/dashboard-client/appointments/${appointmentId}?payment=success`,
+          failure: `${process.env.FRONTEND_URL}/dashboard-client/appointments/${appointmentId}?payment=failure`,
+          pending: `${process.env.FRONTEND_URL}/dashboard-client/appointments/${appointmentId}?payment=pending`,
         },
-        auto_return: 'approved',
+        // auto_return: 'approved', // Temporarily disabled - causes issues with localhost URLs
         notification_url: `${process.env.BACKEND_URL}/payments/webhook`,
         external_reference: `appointment_${appointmentId}`,
-        marketplace_fee: marketplaceFee, // Platform commission
         metadata: {
           appointment_id: appointmentId,
           clinic_id: clinic.id,
           clinic_name: clinic.nombre,
         },
         statement_descriptor: 'Lety Marketplace', // Appears on card statement
+        purpose: 'wallet_purchase', // Required for compliance
+        binary_mode: false, // Allow pending payments for bank transfers, cash, etc.
+        additional_info: {
+          items: [
+            {
+              id: `appointment_${appointmentId}`,
+              title: title,
+              description: `Cita veterinaria en ${clinic.nombre}`,
+              category_id: 'services',
+              quantity: 1,
+              unit_price: amount,
+            }
+          ],
+          payer: {
+            first_name: payerData.name || '',
+            last_name: payerData.surname || '',
+            phone: payer.phone ? { area_code: '', number: payer.phone } : undefined,
+            address: payer.address ? {
+              street_name: payer.address.street_name || payer.address.direccion || '',
+              zip_code: payer.address.zip_code || payer.address.codigo_postal || '',
+            } : undefined,
+          },
+          shipments: {
+            receiver_address: {
+              zip_code: clinic.codigo_postal || '',
+              street_name: clinic.direccion || '',
+              city_name: clinic.ciudad || 'Bogotá',
+            }
+          }
+        },
         expires: true,
         expiration_date_from: new Date().toISOString(),
         expiration_date_to: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), // 24 hours
       };
+
+      console.log('📤 Sending preference to Mercado Pago:', JSON.stringify({
+        items: preferenceData.items,
+        back_urls: preferenceData.back_urls,
+        auto_return: preferenceData.auto_return,
+      }, null, 2));
 
       const response = await preference.create({ body: preferenceData });
 
@@ -194,16 +195,11 @@ export class MercadoPagoPreferenceService {
   /**
    * Get preference details
    * @param {string} preferenceId - Preference ID
-   * @param {string} sellerAccessToken - Clinic's access token
    * @returns {Promise<Object>} Preference details
    */
-  static async getPreference(preferenceId, sellerAccessToken) {
+  static async getPreference(preferenceId) {
     try {
-      const sellerClient = new MercadoPagoConfig({
-        accessToken: sellerAccessToken,
-      });
-
-      const preference = new Preference(sellerClient);
+      const preference = new Preference(client);
       return await preference.get({ preferenceId });
     } catch (error) {
       console.error('Error getting preference:', error);
@@ -220,16 +216,11 @@ export class MercadoPagoPaymentService {
   /**
    * Get payment details
    * @param {string} paymentId - Payment ID
-   * @param {string} sellerAccessToken - Clinic's access token
    * @returns {Promise<Object>} Payment details
    */
-  static async getPayment(paymentId, sellerAccessToken) {
+  static async getPayment(paymentId) {
     try {
-      const sellerClient = new MercadoPagoConfig({
-        accessToken: sellerAccessToken,
-      });
-
-      const payment = new Payment(sellerClient);
+      const payment = new Payment(client);
       return await payment.get({ id: paymentId });
     } catch (error) {
       console.error('Error getting payment:', error);
@@ -240,16 +231,11 @@ export class MercadoPagoPaymentService {
   /**
    * Search payments by external reference
    * @param {string} externalReference - External reference (e.g., 'appointment_123')
-   * @param {string} sellerAccessToken - Clinic's access token
    * @returns {Promise<Array>} List of payments
    */
-  static async searchPayments(externalReference, sellerAccessToken) {
+  static async searchPayments(externalReference) {
     try {
-      const sellerClient = new MercadoPagoConfig({
-        accessToken: sellerAccessToken,
-      });
-
-      const payment = new Payment(sellerClient);
+      const payment = new Payment(client);
       const response = await payment.search({
         options: {
           criteria: 'desc',
@@ -273,16 +259,11 @@ export class MercadoPagoRefundService {
   /**
    * Create a full refund for a payment
    * @param {string} paymentId - Payment ID to refund
-   * @param {string} sellerAccessToken - Clinic's access token
    * @returns {Promise<Object>} Refund details
    */
-  static async createFullRefund(paymentId, sellerAccessToken) {
+  static async createFullRefund(paymentId) {
     try {
-      const sellerClient = new MercadoPagoConfig({
-        accessToken: sellerAccessToken,
-      });
-
-      const refund = new Refund(sellerClient);
+      const refund = new Refund(client);
 
       const response = await refund.create({
         body: {
@@ -307,16 +288,11 @@ export class MercadoPagoRefundService {
    * Create a partial refund for a payment
    * @param {string} paymentId - Payment ID to refund
    * @param {number} amount - Amount to refund
-   * @param {string} sellerAccessToken - Clinic's access token
    * @returns {Promise<Object>} Refund details
    */
-  static async createPartialRefund(paymentId, amount, sellerAccessToken) {
+  static async createPartialRefund(paymentId, amount) {
     try {
-      const sellerClient = new MercadoPagoConfig({
-        accessToken: sellerAccessToken,
-      });
-
-      const refund = new Refund(sellerClient);
+      const refund = new Refund(client);
 
       const response = await refund.create({
         body: {
@@ -341,16 +317,11 @@ export class MercadoPagoRefundService {
   /**
    * Get refund details
    * @param {string} refundId - Refund ID
-   * @param {string} sellerAccessToken - Clinic's access token
    * @returns {Promise<Object>} Refund details
    */
-  static async getRefund(refundId, sellerAccessToken) {
+  static async getRefund(refundId) {
     try {
-      const sellerClient = new MercadoPagoConfig({
-        accessToken: sellerAccessToken,
-      });
-
-      const refund = new Refund(sellerClient);
+      const refund = new Refund(client);
       return await refund.get({ id: refundId });
     } catch (error) {
       console.error('Error getting refund:', error);
@@ -364,47 +335,85 @@ export class MercadoPagoRefundService {
  */
 export class MercadoPagoUtils {
   /**
-   * Calculate marketplace fee based on commission percentage
-   * @param {number} amount - Total amount
+   * Calculate platform commission and clinic amount
+   * @param {number} totalAmount - Total amount paid by customer
    * @param {number} commissionPercentage - Commission percentage (0-100)
-   * @returns {number} Fee amount
+   * @returns {Object} { platformCommission, clinicAmount }
    */
-  static calculateMarketplaceFee(amount, commissionPercentage) {
-    return parseFloat((amount * (commissionPercentage / 100)).toFixed(2));
+  static calculateCommission(totalAmount, commissionPercentage) {
+    const platformCommission = parseFloat((totalAmount * (commissionPercentage / 100)).toFixed(2));
+    const clinicAmount = parseFloat((totalAmount - platformCommission).toFixed(2));
+
+    return {
+      platformCommission,
+      clinicAmount,
+    };
   }
 
   /**
    * Validate webhook signature (for security)
    * @param {Object} headers - Request headers
-   * @param {Object} body - Request body
+   * @param {Object} query - Query parameters
+   * @param {string} webhookSecret - Mercado Pago webhook secret
    * @returns {boolean} True if signature is valid
    */
-  static validateWebhookSignature(headers, body) {
-    // TODO: Implement signature validation using x-signature header
-    // This requires the webhook secret from Mercado Pago
-    // For now, we'll validate the x-request-id header exists
-    return !!headers['x-request-id'];
-  }
+  static validateWebhookSignature(headers, query, webhookSecret) {
+    // Validate x-request-id header exists
+    if (!headers['x-request-id']) {
+      console.error('Missing x-request-id header');
+      return false;
+    }
 
-  /**
-   * Check if access token is expired or about to expire
-   * @param {Date} expirationDate - Token expiration date
-   * @returns {boolean} True if token needs refresh
-   */
-  static needsTokenRefresh(expirationDate) {
-    if (!expirationDate) return true;
+    // If no webhook secret is configured, skip signature validation
+    // (not recommended for production, but useful for development)
+    if (!webhookSecret) {
+      console.warn('⚠️ No webhook secret configured - skipping signature validation');
+      return true;
+    }
 
-    const now = new Date();
-    const expiration = new Date(expirationDate);
-    const daysUntilExpiration = (expiration - now) / (1000 * 60 * 60 * 24);
+    // Get signature from header
+    const xSignature = headers['x-signature'];
+    const xRequestId = headers['x-request-id'];
 
-    // Refresh if less than 7 days until expiration
-    return daysUntilExpiration < 7;
+    if (!xSignature || !xRequestId) {
+      console.error('Missing x-signature or x-request-id header');
+      return false;
+    }
+
+    // Extract data_id from query parameters (sent by Mercado Pago)
+    const dataId = query.id || query['data.id'];
+
+    if (!dataId) {
+      console.error('Missing data ID in query parameters');
+      return false;
+    }
+
+    try {
+      // Mercado Pago webhook signature validation
+      // The signature is created with: HMAC-SHA256(data_id + x-request-id, webhook_secret)
+      const message = `${dataId}${xRequestId}`;
+      const expectedSignature = crypto.createHmac('sha256', webhookSecret)
+        .update(message)
+        .digest('hex');
+
+      // Compare signatures
+      const isValid = expectedSignature === xSignature;
+
+      if (!isValid) {
+        console.error('Invalid webhook signature');
+        console.error('Expected:', expectedSignature);
+        console.error('Received:', xSignature);
+      }
+
+      return isValid;
+    } catch (error) {
+      console.error('Error validating webhook signature:', error);
+      return false;
+    }
   }
 }
 
 export default {
-  OAuth: MercadoPagoOAuthService,
   Preference: MercadoPagoPreferenceService,
   Payment: MercadoPagoPaymentService,
   Refund: MercadoPagoRefundService,

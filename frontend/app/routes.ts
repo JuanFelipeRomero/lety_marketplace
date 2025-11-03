@@ -22,11 +22,11 @@ export default [
     route(
       "dashboard-vet/services",
       "routes/DashboardVet/ServicesVet/index.tsx"
-    ), // Ruta para general information
+    ), // Ruta para servicios
     route(
-      "dashboard-vet/mercadopago-setup",
-      "routes/dashboard-vet/mercadopago-setup.tsx"
-    ), // Ruta para configuración de Mercado Pago
+      "dashboard-vet/earnings",
+      "routes/dashboard-vet/earnings.tsx"
+    ), // Ruta para ver ganancias de la clínica
   ]),
   layout("layouts/DashboardLayoutClient/index.tsx", [
     route("dashboard-client", "routes/DashboardClient/index.tsx"),

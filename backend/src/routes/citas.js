@@ -231,7 +231,10 @@ router.get("/appointments/user", async (req, res) => {
         mascotas(nombre, foto_url),
         clinicas(nombre, direccion),
         motivo_reprogramacion,
-        motivo_cancelacion
+        motivo_cancelacion,
+        payment_status,
+        payment_url,
+        payment_amount
       `
       )
       .eq("id_usuario", userId)
@@ -264,10 +267,15 @@ router.get("/appointments/user", async (req, res) => {
           ? "cancelled"
           : cita.estado === "finalizada"
           ? "completed"
+          : cita.estado === "pagada"
+          ? "completed"
           : "unknown",
       notes: cita.notas_adicionales || "",
       motivo_reprogramacion: cita.motivo_reprogramacion || "",
       motivo_cancelacion: cita.motivo_cancelacion || "",
+      payment_status: cita.payment_status || "pending",
+      payment_url: cita.payment_url || null,
+      payment_amount: cita.payment_amount || null,
     }));
 
     res.status(200).json({ citas: citasFormateadas });
@@ -566,52 +574,31 @@ router.put("/appointments/:appointmentId/status", async (req, res) => {
           .select(`
             id_cita,
             id_usuario,
+            id_clinica,
             servicios(nombre, precio),
             usuarios(nombre, correo),
-            clinicas(
-              nombre,
-              mercadopago_access_token,
-              mercadopago_public_key,
-              mp_connected
-            )
+            clinicas(nombre)
           `)
           .eq("id_cita", appointmentId)
           .single();
 
         if (errorCitaCompleta || !citaCompleta) {
           console.warn("No se pudo obtener información completa de la cita para pago");
-        } else if (citaCompleta.clinicas?.mp_connected && citaCompleta.clinicas?.mercadopago_access_token) {
-          // La clínica tiene Mercado Pago configurado
-
-          // Obtener configuración de comisión de plataforma
-          const { data: configComision } = await supabase
-            .from('configuracion_plataforma')
-            .select('valor')
-            .eq('clave', 'commission_percentage')
-            .single();
-
-          const commissionPercentage = configComision?.valor ? parseFloat(configComision.valor) : 10;
-
-          // Calcular montos
+        } else {
+          // Crear preferencia de pago usando el flujo simplificado (todos los pagos van a la cuenta de la plataforma)
           const serviceAmount = parseFloat(citaCompleta.servicios.precio);
-          const marketplaceFee = MercadoPagoUtils.calculateMarketplaceFee(
-            serviceAmount,
-            commissionPercentage
-          );
 
           // Crear preferencia de pago
           const preference = await MercadoPagoPreferenceService.createPreference({
-            sellerAccessToken: citaCompleta.clinicas.mercadopago_access_token,
             appointmentId: citaCompleta.id_cita,
             title: citaCompleta.servicios.nombre,
             amount: serviceAmount,
-            marketplaceFee: marketplaceFee,
             payer: {
               name: citaCompleta.usuarios.nombre,
               email: citaCompleta.usuarios.correo,
             },
             clinic: {
-              id: clinicaId,
+              id: citaCompleta.id_clinica,
               nombre: citaCompleta.clinicas.nombre,
             },
           });
@@ -624,15 +611,12 @@ router.put("/appointments/:appointmentId/status", async (req, res) => {
               preference_id: preference.id,
               payment_url: preference.init_point,
               payment_amount: serviceAmount,
-              marketplace_fee: marketplaceFee,
             })
             .eq("id_cita", appointmentId);
 
           paymentUrl = preference.init_point;
 
           console.log(`✅ Payment preference created for appointment ${appointmentId}`);
-        } else {
-          console.warn(`⚠️ Clinic ${clinicaId} does not have Mercado Pago connected - skipping payment`);
         }
       } catch (paymentError) {
         console.error("Error creating payment preference:", paymentError);

@@ -13,6 +13,7 @@ import {
   Plus,
   Calendar,
   AlertCircle,
+  CreditCard,
 } from "lucide-react";
 import { Link } from "react-router";
 import { Badge } from "~/components/ui/badge";
@@ -43,6 +44,9 @@ interface Appointment {
   notes?: string;
   motivo_reprogramacion?: string;
   motivo_cancelacion?: string;
+  payment_status?: "pending" | "awaiting_payment" | "paid" | "refunded" | "failed";
+  payment_url?: string;
+  payment_amount?: number;
 }
 
 export default function AppointmentsPage() {
@@ -56,34 +60,111 @@ export default function AppointmentsPage() {
   const [selectedAppointmentId, setSelectedAppointmentId] = useState<number | null>(null);
 
   const token = useAuthStore((state) => state.token);
+  const [isVerifyingPayment, setIsVerifyingPayment] = useState(false);
+
+  // Function to verify payment status with Mercado Pago
+  const verifyPayment = async (appointmentId: number, paymentId?: string) => {
+    if (!token) return;
+
+    setIsVerifyingPayment(true);
+    try {
+      console.log(`🔍 Verifying payment for appointment ${appointmentId}`);
+
+      const response = await fetch(`${API_URL}/payments/verify/${appointmentId}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ payment_id: paymentId }),
+      });
+
+      const data = await response.json();
+
+      if (response.ok) {
+        // Show appropriate message based on payment status
+        if (data.payment_status === 'paid') {
+          toast.success(data.message || '¡Pago confirmado!');
+        } else if (data.mp_status === 'pending') {
+          toast.info(data.message || 'Tu pago está pendiente');
+          // Show pending payment info if available
+          if (data.pending_info) {
+            toast.info(data.pending_info.message, { duration: 8000 });
+          }
+        } else if (data.mp_status === 'rejected') {
+          toast.error(data.message || 'El pago fue rechazado');
+        } else if (data.already_processed) {
+          toast.success(data.message);
+        } else {
+          toast.info(data.message || 'Estado de pago actualizado');
+        }
+
+        // Refresh appointments list
+        fetchAppointments();
+      } else {
+        if (data.requires_payment) {
+          toast.warning(data.message || 'No se encontró ningún pago para esta cita');
+        } else {
+          toast.error(data.message || 'Error al verificar el pago');
+        }
+      }
+    } catch (error) {
+      console.error('Error verifying payment:', error);
+      toast.error('Error al verificar el pago. Por favor intenta nuevamente.');
+    } finally {
+      setIsVerifyingPayment(false);
+    }
+  };
+
+  const fetchAppointments = async () => {
+    try {
+
+      if (!token) {
+        console.error("Token no encontrado");
+        return;
+      }
+
+      const response = await fetch(`${API_URL}/appointments/user`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error("Error al traer citas");
+      }
+
+      const data = await response.json();
+
+      setAppointments(data.citas || []);
+    } catch (error) {
+      console.error("Error trayendo citas:", error);
+    }
+  };
+
+  // Check for payment status on page load (when returning from Mercado Pago)
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const paymentStatus = urlParams.get('payment'); // 'success', 'pending', 'failure'
+    const paymentId = urlParams.get('payment_id') || urlParams.get('collection_id');
+
+    if (paymentStatus && appointments.length > 0) {
+      // Find the most recent appointment with awaiting_payment status
+      const pendingAppointment = appointments.find(
+        apt => apt.payment_status === 'awaiting_payment'
+      );
+
+      if (pendingAppointment) {
+        console.log(`📥 Returned from MP with status: ${paymentStatus}, verifying payment...`);
+        verifyPayment(pendingAppointment.id, paymentId || undefined);
+
+        // Clean URL params after verification
+        window.history.replaceState({}, '', window.location.pathname);
+      }
+    }
+  }, [appointments]);
 
   useEffect(() => {
-    const fetchAppointments = async () => {
-      try {
-
-        if (!token) {
-          console.error("Token no encontrado");
-          return;
-        }
-
-        const response = await fetch(`${API_URL}/appointments/user`, {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        });
-
-        if (!response.ok) {
-          throw new Error("Error al traer citas");
-        }
-
-        const data = await response.json();
-
-        setAppointments(data.citas || []);
-      } catch (error) {
-        console.error("Error trayendo citas:", error);
-      }
-    };
-
     fetchAppointments();
   }, []);
 
@@ -307,6 +388,46 @@ export default function AppointmentsPage() {
                         </div>
 
                         <div className="mt-4 flex justify-end gap-2">
+                          {/* Botón de Pagar - Mostrar si la cita está confirmada y tiene payment_url */}
+                          {appointment.status === "confirmed" &&
+                            appointment.payment_url &&
+                            appointment.payment_status === "awaiting_payment" && (
+                            <>
+                              <Button size="sm" className="bg-green-600 hover:bg-green-700" asChild>
+                                <a href={appointment.payment_url} target="_blank" rel="noopener noreferrer">
+                                  <CreditCard className="mr-2 h-4 w-4" />
+                                  Pagar
+                                </a>
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => verifyPayment(appointment.id)}
+                                disabled={isVerifyingPayment}
+                              >
+                                {isVerifyingPayment ? (
+                                  <>
+                                    <Clock className="mr-2 h-4 w-4 animate-spin" />
+                                    Verificando...
+                                  </>
+                                ) : (
+                                  <>
+                                    <CheckCircle className="mr-2 h-4 w-4" />
+                                    Verificar Estado
+                                  </>
+                                )}
+                              </Button>
+                            </>
+                          )}
+
+                          {/* Mostrar badge si ya está pagado */}
+                          {appointment.payment_status === "paid" && (
+                            <Badge className="bg-green-100 text-green-800">
+                              <CheckCircle className="mr-1 h-3 w-3" />
+                              Pagado
+                            </Badge>
+                          )}
+
                           {(appointment.status === "confirmed" ||
                             appointment.status === "pending") && (
                             <Button variant="outline" size="sm" asChild>
