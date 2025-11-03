@@ -223,6 +223,7 @@ router.get("/appointments/user", async (req, res) => {
         id_cita,
         id_mascota,
         id_clinica,
+        id_servicio,
         fecha_inicio,
         horario,
         motivo,
@@ -230,6 +231,7 @@ router.get("/appointments/user", async (req, res) => {
         notas_adicionales,
         mascotas(nombre, foto_url),
         clinicas(nombre, direccion),
+        servicios(id_servicio, nombre),
         motivo_reprogramacion,
         motivo_cancelacion,
         payment_status,
@@ -238,7 +240,7 @@ router.get("/appointments/user", async (req, res) => {
       `
       )
       .eq("id_usuario", userId)
-      .order("fecha_inicio", { ascending: true });
+      .order("fecha_inicio", { ascending: false });
 
     if (error) {
       console.error("Error obteniendo citas:", error);
@@ -247,10 +249,14 @@ router.get("/appointments/user", async (req, res) => {
 
     const citasFormateadas = data.map((cita) => ({
       id: cita.id_cita,
+      petId: cita.id_mascota,
       petName: cita.mascotas?.nombre || "Mascota",
       petImage: cita.mascotas?.foto_url || "/placeholder.svg",
+      clinicId: cita.id_clinica,
       clinicName: cita.clinicas?.nombre || "Clínica veterinaria",
       clinicAddress: cita.clinicas?.direccion || "Dirección desconocida",
+      serviceId: cita.id_servicio,
+      serviceName: cita.servicios?.nombre || "Servicio no especificado",
       date: new Date(cita.fecha_inicio).toLocaleDateString("es-ES", {
         year: "numeric",
         month: "long",

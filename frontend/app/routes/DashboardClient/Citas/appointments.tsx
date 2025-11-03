@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { Card, CardContent } from "~/components/ui/card";
 import { toast } from "sonner";
 import { useNavigate } from "react-router";
@@ -29,14 +29,20 @@ import {
 import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
 import { Label } from "~/components/ui/label";
 import { Textarea } from "~/components/ui/textarea";
+import { AppointmentCard } from "~/components/appointment-card";
+import { AppointmentFilters } from "~/components/appointment-filters";
 
 
 interface Appointment {
   id: number;
+  petId: number;
   petName: string;
   petImage: string;
+  clinicId: number;
   clinicName: string;
   clinicAddress: string;
+  serviceId?: number;
+  serviceName?: string;
   date: string;
   time: string;
   reason: string;
@@ -61,6 +67,32 @@ export default function AppointmentsPage() {
 
   const token = useAuthStore((state) => state.token);
   const [isVerifyingPayment, setIsVerifyingPayment] = useState(false);
+
+  // Filter states
+  const [selectedPets, setSelectedPets] = useState<number[]>([]);
+  const [selectedStatuses, setSelectedStatuses] = useState<string[]>([]);
+  const [selectedClinics, setSelectedClinics] = useState<number[]>([]);
+
+  // Derive unique pets and clinics from appointments
+  const uniquePets = useMemo(() => {
+    const petMap = new Map();
+    appointments.forEach((apt) => {
+      if (!petMap.has(apt.petId)) {
+        petMap.set(apt.petId, { id: apt.petId, name: apt.petName });
+      }
+    });
+    return Array.from(petMap.values());
+  }, [appointments]);
+
+  const uniqueClinics = useMemo(() => {
+    const clinicMap = new Map();
+    appointments.forEach((apt) => {
+      if (!clinicMap.has(apt.clinicId)) {
+        clinicMap.set(apt.clinicId, { id: apt.clinicId, name: apt.clinicName });
+      }
+    });
+    return Array.from(clinicMap.values());
+  }, [appointments]);
 
   // Function to verify payment status with Mercado Pago
   const verifyPayment = async (appointmentId: number, paymentId?: string) => {
@@ -168,14 +200,46 @@ export default function AppointmentsPage() {
     fetchAppointments();
   }, []);
 
-  const filteredAppointments = appointments.filter((appointment) => {
-    const searchLower = searchQuery.toLowerCase();
-    return (
-      appointment.petName.toLowerCase().includes(searchLower) ||
-      appointment.clinicName.toLowerCase().includes(searchLower) ||
-      appointment.reason.toLowerCase().includes(searchLower)
-    );
-  });
+  const filteredAppointments = useMemo(() => {
+    return appointments.filter((appointment) => {
+      // Search filter (expanded)
+      const searchLower = searchQuery.toLowerCase();
+      const matchesSearch =
+        !searchQuery ||
+        appointment.petName.toLowerCase().includes(searchLower) ||
+        appointment.clinicName.toLowerCase().includes(searchLower) ||
+        appointment.reason.toLowerCase().includes(searchLower) ||
+        appointment.serviceName?.toLowerCase().includes(searchLower) ||
+        appointment.notes?.toLowerCase().includes(searchLower);
+
+      // Pet filter
+      const matchesPet =
+        selectedPets.length === 0 || selectedPets.includes(appointment.petId);
+
+      // Status filter
+      const matchesStatus =
+        selectedStatuses.length === 0 ||
+        selectedStatuses.includes(appointment.status);
+
+      // Clinic filter
+      const matchesClinic =
+        selectedClinics.length === 0 ||
+        selectedClinics.includes(appointment.clinicId);
+
+      return matchesSearch && matchesPet && matchesStatus && matchesClinic;
+    });
+  }, [appointments, searchQuery, selectedPets, selectedStatuses, selectedClinics]);
+
+  const handleResetFilters = () => {
+    setSelectedPets([]);
+    setSelectedStatuses([]);
+    setSelectedClinics([]);
+  };
+
+  const handleCancelClick = (appointmentId: number) => {
+    setSelectedAppointmentId(appointmentId);
+    setIsCancelDialogOpen(true);
+  };
 
   const getStatusBadge = (status: Appointment["status"]) => {
     switch (status) {
@@ -295,13 +359,26 @@ export default function AppointmentsPage() {
           <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
           <Input
             type="search"
-            placeholder="Buscar cita por mascota, clínica o motivo..."
+            placeholder="Buscar por mascota, clínica, servicio, motivo..."
             className="pl-8"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
           />
         </div>
       </div>
+
+      {/* Filters */}
+      <AppointmentFilters
+        pets={uniquePets}
+        clinics={uniqueClinics}
+        selectedPets={selectedPets}
+        selectedStatuses={selectedStatuses}
+        selectedClinics={selectedClinics}
+        onPetsChange={setSelectedPets}
+        onStatusChange={setSelectedStatuses}
+        onClinicsChange={setSelectedClinics}
+        onReset={handleResetFilters}
+      />
 
       <Tabs defaultValue="all" className="space-y-4">
         <TabsList>
@@ -341,171 +418,13 @@ export default function AppointmentsPage() {
           ) : (
             <div className="space-y-4">
               {filteredAppointments.map((appointment) => (
-                <Card
+                <AppointmentCard
                   key={appointment.id}
-                  className={`overflow-hidden border-l-4 ${getStatusBorderColor(appointment.status)} transition-all duration-300 hover:shadow-xl hover:scale-[1.01]`}
-                >
-                  <CardContent className="p-0">
-                    <div className="flex flex-col md:flex-row">
-                      {/* Pet Info Section - Left */}
-                      <div className="flex items-center gap-4 border-b p-6 md:w-1/3 md:border-b-0 md:border-r bg-gradient-to-br from-slate-50 to-gray-50">
-                        <div className="relative h-20 w-20 flex-shrink-0 overflow-hidden rounded-full bg-slate-100 ring-4 ring-white shadow-lg">
-                          <img
-                            src={appointment.petImage || "/placeholder.svg"}
-                            alt={appointment.petName}
-                            className="h-full w-full object-cover transition-transform duration-300 hover:scale-110"
-                          />
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <h3 className="font-bold text-lg text-gray-900 truncate">{appointment.petName}</h3>
-                          <div className="flex items-center gap-1.5 text-sm text-gray-600 mt-1">
-                            <Calendar className="h-4 w-4 text-[#007A55]" />
-                            <p className="truncate">{appointment.date}</p>
-                          </div>
-                          <div className="flex items-center gap-1.5 text-sm text-gray-600">
-                            <Clock className="h-4 w-4 text-[#007A55]" />
-                            <p>{appointment.time}</p>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Clinic & Details Section - Right */}
-                      <div className="flex flex-1 flex-col justify-between p-6 bg-white">
-                        <div>
-                          <div className="mb-3 flex items-start justify-between gap-2">
-                            <h4 className="font-bold text-lg text-gray-900 flex-1">
-                              {appointment.clinicName}
-                            </h4>
-                            {getStatusBadge(appointment.status)}
-                          </div>
-                          <p className="text-sm text-gray-600 mb-4">
-                            {appointment.clinicAddress}
-                          </p>
-                          <div className="mt-3 flex items-start gap-3 bg-slate-50 rounded-lg p-4">
-                            <div className="mt-0.5 flex-shrink-0">
-                              {getStatusIcon(appointment.status)}
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <p className="text-sm">
-                                <span className="font-bold text-gray-900">Motivo:</span>{" "}
-                                <span className="text-gray-700">{appointment.reason}</span>
-                              </p>
-                              {appointment.status === "cancelled" && appointment.motivo_cancelacion && (
-                                <p className="text-sm mt-2">
-                                 <span className="font-bold text-red-700">Motivo de cancelación:</span>{" "}
-                                  <span className="text-gray-700">{appointment.motivo_cancelacion}</span>
-                                </p>
-                              )}
-
-                              {appointment.status !== "cancelled" && appointment.motivo_reprogramacion && (
-                                <p className="text-sm mt-2">
-                                  <span className="font-bold text-blue-700">Motivo de reprogramación:</span>{" "}
-                                  <span className="text-gray-700">{appointment.motivo_reprogramacion}</span>
-                                </p>
-                              )}
-                              {appointment.notes && (
-                                <p className="mt-2 text-sm text-gray-600 italic">
-                                  {appointment.notes}
-                                </p>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="mt-6 flex flex-wrap justify-end gap-2">
-                          {/* Botón de Pagar - Mostrar si la cita está confirmada y tiene payment_url */}
-                          {appointment.status === "confirmed" &&
-                            appointment.payment_url &&
-                            appointment.payment_status === "awaiting_payment" && (
-                            <>
-                              <Button
-                                size="sm"
-                                className="bg-[#007A55] hover:bg-[#006644] text-white shadow-md hover:shadow-lg transition-all duration-300"
-                                asChild
-                              >
-                                <a href={appointment.payment_url} target="_blank" rel="noopener noreferrer">
-                                  <CreditCard className="mr-2 h-4 w-4" />
-                                  Pagar
-                                </a>
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={() => verifyPayment(appointment.id)}
-                                disabled={isVerifyingPayment}
-                                className="border-[#007A55] text-[#007A55] hover:bg-[#007A55]/5 transition-all duration-300"
-                              >
-                                {isVerifyingPayment ? (
-                                  <>
-                                    <Clock className="mr-2 h-4 w-4 animate-spin" />
-                                    Verificando...
-                                  </>
-                                ) : (
-                                  <>
-                                    <CheckCircle className="mr-2 h-4 w-4" />
-                                    Verificar Estado
-                                  </>
-                                )}
-                              </Button>
-                            </>
-                          )}
-
-                          {/* Mostrar badge si ya está pagado */}
-                          {appointment.payment_status === "paid" && (
-                            <Badge className="bg-[#007A55] text-white shadow-md">
-                              <CheckCircle className="mr-1.5 h-4 w-4" />
-                              Pagado
-                            </Badge>
-                          )}
-
-                          {(appointment.status === "confirmed" ||
-                            appointment.status === "pending") && (
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              asChild
-                              className="border-slate-300 text-slate-700 hover:bg-slate-50 hover:border-slate-400 transition-all duration-300"
-                            >
-                              <Link
-                                to={`/dashboard-client/appointment/${appointment.id}/reschedule`}
-                              >
-                                <Calendar className="mr-2 h-4 w-4" />
-                                Reprogramar
-                              </Link>
-                            </Button>
-                          )}
-                          {(appointment.status === "confirmed" ||
-                            appointment.status === "pending") && (
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="border-slate-300 text-slate-700 hover:bg-slate-50 hover:border-slate-400 transition-all duration-300"
-                              onClick={() => {
-                                setSelectedAppointmentId(appointment.id);
-                                setIsCancelDialogOpen(true);
-                              }}
-                            >
-                              <XCircle className="mr-2 h-4 w-4" />
-                              Cancelar
-                            </Button>
-                          )}
-                          <Button
-                            size="sm"
-                            asChild
-                            className="bg-[#007A55] hover:bg-[#006644] text-white shadow-md hover:shadow-lg transition-all duration-300"
-                          >
-                            <Link
-                              to={`/dashboard-client/appointments/${appointment.id}`}
-                            >
-                              <Search className="mr-2 h-4 w-4" />
-                              Ver Detalles
-                            </Link>
-                          </Button>
-                        </div>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
+                  appointment={appointment}
+                  onCancel={handleCancelClick}
+                  onVerifyPayment={verifyPayment}
+                  isVerifyingPayment={isVerifyingPayment}
+                />
               ))}
             </div>
           )}
@@ -520,109 +439,13 @@ export default function AppointmentsPage() {
                   appointment.status === "pending"
               )
               .map((appointment) => (
-                <Card
+                <AppointmentCard
                   key={appointment.id}
-                  className={`overflow-hidden border-l-4 ${getStatusBorderColor(appointment.status)} transition-all duration-300 hover:shadow-xl hover:scale-[1.01]`}
-                >
-                  <CardContent className="p-0">
-                    <div className="flex flex-col md:flex-row">
-                      {/* Pet Info Section - Left */}
-                      <div className="flex items-center gap-4 border-b p-6 md:w-1/3 md:border-b-0 md:border-r bg-gradient-to-br from-slate-50 to-gray-50">
-                        <div className="relative h-20 w-20 flex-shrink-0 overflow-hidden rounded-full bg-slate-100 ring-4 ring-white shadow-lg">
-                          <img
-                            src={appointment.petImage || "/placeholder.svg"}
-                            alt={appointment.petName}
-                            className="h-full w-full object-cover transition-transform duration-300 hover:scale-110"
-                          />
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <h3 className="font-bold text-lg text-gray-900 truncate">{appointment.petName}</h3>
-                          <div className="flex items-center gap-1.5 text-sm text-gray-600 mt-1">
-                            <Calendar className="h-4 w-4 text-[#007A55]" />
-                            <p className="truncate">{appointment.date}</p>
-                          </div>
-                          <div className="flex items-center gap-1.5 text-sm text-gray-600">
-                            <Clock className="h-4 w-4 text-[#007A55]" />
-                            <p>{appointment.time}</p>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Clinic & Details Section - Right */}
-                      <div className="flex flex-1 flex-col justify-between p-6 bg-white">
-                        <div>
-                          <div className="mb-3 flex items-start justify-between gap-2">
-                            <h4 className="font-bold text-lg text-gray-900 flex-1">
-                              {appointment.clinicName}
-                            </h4>
-                            {getStatusBadge(appointment.status)}
-                          </div>
-                          <p className="text-sm text-gray-600 mb-4">
-                            {appointment.clinicAddress}
-                          </p>
-                          <div className="mt-3 flex items-start gap-3 bg-slate-50 rounded-lg p-4">
-                            <div className="mt-0.5 flex-shrink-0">
-                              {getStatusIcon(appointment.status)}
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <p className="text-sm">
-                                <span className="font-bold text-gray-900">Motivo:</span>{" "}
-                                <span className="text-gray-700">{appointment.reason}</span>
-                              </p>
-                              {appointment.motivo_reprogramacion && (
-                                <p className="text-sm mt-2">
-                                  <span className="font-bold text-blue-700">Motivo de reprogramación:</span>{" "}
-                                  <span className="text-gray-700">{appointment.motivo_reprogramacion}</span>
-                                </p>
-                              )}
-                              {appointment.notes && (
-                                <p className="mt-2 text-sm text-gray-600 italic">
-                                  {appointment.notes}
-                                </p>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="mt-6 flex flex-wrap justify-end gap-2">
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            asChild
-                            className="border-slate-300 text-slate-700 hover:bg-slate-50 hover:border-slate-400 transition-all duration-300"
-                          >
-                            <Link to={`/dashboard-client/appointment/${appointment.id}/reschedule`}>
-                              <Calendar className="mr-2 h-4 w-4" />
-                              Reprogramar
-                            </Link>
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="border-slate-300 text-slate-700 hover:bg-slate-50 hover:border-slate-400 transition-all duration-300"
-                            onClick={() => {
-                              setSelectedAppointmentId(appointment.id);
-                              setIsCancelDialogOpen(true);
-                            }}
-                          >
-                            <XCircle className="mr-2 h-4 w-4" />
-                            Cancelar
-                          </Button>
-                          <Button
-                            size="sm"
-                            asChild
-                            className="bg-[#007A55] hover:bg-[#006644] text-white shadow-md hover:shadow-lg transition-all duration-300"
-                          >
-                            <Link to={`/dashboard-client/appointments/${appointment.id}`}>
-                              <Search className="mr-2 h-4 w-4" />
-                              Ver Detalles
-                            </Link>
-                          </Button>
-                        </div>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
+                  appointment={appointment}
+                  onCancel={handleCancelClick}
+                  onVerifyPayment={verifyPayment}
+                  isVerifyingPayment={isVerifyingPayment}
+                />
               ))}
           </div>
         </TabsContent>
@@ -632,80 +455,13 @@ export default function AppointmentsPage() {
             {filteredAppointments
               .filter((appointment) => appointment.status === "completed")
               .map((appointment) => (
-                <Card
+                <AppointmentCard
                   key={appointment.id}
-                  className={`overflow-hidden border-l-4 ${getStatusBorderColor(appointment.status)} transition-all duration-300 hover:shadow-xl hover:scale-[1.01]`}
-                >
-                  <CardContent className="p-0">
-                    <div className="flex flex-col md:flex-row">
-                      {/* Pet Info Section - Left */}
-                      <div className="flex items-center gap-4 border-b p-6 md:w-1/3 md:border-b-0 md:border-r bg-gradient-to-br from-slate-50 to-gray-50">
-                        <div className="relative h-20 w-20 flex-shrink-0 overflow-hidden rounded-full bg-slate-100 ring-4 ring-white shadow-lg">
-                          <img
-                            src={appointment.petImage || "/placeholder.svg"}
-                            alt={appointment.petName}
-                            className="h-full w-full object-cover transition-transform duration-300 hover:scale-110"
-                          />
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <h3 className="font-bold text-lg text-gray-900 truncate">{appointment.petName}</h3>
-                          <div className="flex items-center gap-1.5 text-sm text-gray-600 mt-1">
-                            <Calendar className="h-4 w-4 text-[#007A55]" />
-                            <p className="truncate">{appointment.date}</p>
-                          </div>
-                          <div className="flex items-center gap-1.5 text-sm text-gray-600">
-                            <Clock className="h-4 w-4 text-[#007A55]" />
-                            <p>{appointment.time}</p>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Clinic & Details Section - Right */}
-                      <div className="flex flex-1 flex-col justify-between p-6 bg-white">
-                        <div>
-                          <div className="mb-3 flex items-start justify-between gap-2">
-                            <h4 className="font-bold text-lg text-gray-900 flex-1">
-                              {appointment.clinicName}
-                            </h4>
-                            {getStatusBadge(appointment.status)}
-                          </div>
-                          <p className="text-sm text-gray-600 mb-4">
-                            {appointment.clinicAddress}
-                          </p>
-                          <div className="mt-3 flex items-start gap-3 bg-slate-50 rounded-lg p-4">
-                            <div className="mt-0.5 flex-shrink-0">
-                              {getStatusIcon(appointment.status)}
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <p className="text-sm">
-                                <span className="font-bold text-gray-900">Motivo:</span>{" "}
-                                <span className="text-gray-700">{appointment.reason}</span>
-                              </p>
-                              {appointment.notes && (
-                                <p className="mt-2 text-sm text-gray-600 italic">
-                                  {appointment.notes}
-                                </p>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="mt-6 flex flex-wrap justify-end gap-2">
-                          <Button
-                            size="sm"
-                            asChild
-                            className="bg-[#007A55] hover:bg-[#006644] text-white shadow-md hover:shadow-lg transition-all duration-300"
-                          >
-                            <Link to={`/dashboard-client/appointments/${appointment.id}`}>
-                              <Search className="mr-2 h-4 w-4" />
-                              Ver Detalles
-                            </Link>
-                          </Button>
-                        </div>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
+                  appointment={appointment}
+                  onCancel={handleCancelClick}
+                  onVerifyPayment={verifyPayment}
+                  isVerifyingPayment={isVerifyingPayment}
+                />
               ))}
           </div>
         </TabsContent>
@@ -715,86 +471,13 @@ export default function AppointmentsPage() {
             {filteredAppointments
               .filter((appointment) => appointment.status === "cancelled")
               .map((appointment) => (
-                <Card
+                <AppointmentCard
                   key={appointment.id}
-                  className={`overflow-hidden border-l-4 ${getStatusBorderColor(appointment.status)} transition-all duration-300 hover:shadow-xl hover:scale-[1.01]`}
-                >
-                  <CardContent className="p-0">
-                    <div className="flex flex-col md:flex-row">
-                      {/* Pet Info Section - Left */}
-                      <div className="flex items-center gap-4 border-b p-6 md:w-1/3 md:border-b-0 md:border-r bg-gradient-to-br from-slate-50 to-gray-50">
-                        <div className="relative h-20 w-20 flex-shrink-0 overflow-hidden rounded-full bg-slate-100 ring-4 ring-white shadow-lg">
-                          <img
-                            src={appointment.petImage || "/placeholder.svg"}
-                            alt={appointment.petName}
-                            className="h-full w-full object-cover transition-transform duration-300 hover:scale-110"
-                          />
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <h3 className="font-bold text-lg text-gray-900 truncate">{appointment.petName}</h3>
-                          <div className="flex items-center gap-1.5 text-sm text-gray-600 mt-1">
-                            <Calendar className="h-4 w-4 text-[#007A55]" />
-                            <p className="truncate">{appointment.date}</p>
-                          </div>
-                          <div className="flex items-center gap-1.5 text-sm text-gray-600">
-                            <Clock className="h-4 w-4 text-[#007A55]" />
-                            <p>{appointment.time}</p>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Clinic & Details Section - Right */}
-                      <div className="flex flex-1 flex-col justify-between p-6 bg-white">
-                        <div>
-                          <div className="mb-3 flex items-start justify-between gap-2">
-                            <h4 className="font-bold text-lg text-gray-900 flex-1">
-                              {appointment.clinicName}
-                            </h4>
-                            {getStatusBadge(appointment.status)}
-                          </div>
-                          <p className="text-sm text-gray-600 mb-4">
-                            {appointment.clinicAddress}
-                          </p>
-                          <div className="mt-3 flex items-start gap-3 bg-slate-50 rounded-lg p-4">
-                            <div className="mt-0.5 flex-shrink-0">
-                              {getStatusIcon(appointment.status)}
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <p className="text-sm">
-                                <span className="font-bold text-gray-900">Motivo:</span>{" "}
-                                <span className="text-gray-700">{appointment.reason}</span>
-                              </p>
-                              {appointment.motivo_cancelacion && (
-                                <p className="text-sm mt-2">
-                                 <span className="font-bold text-red-700">Motivo de cancelación:</span>{" "}
-                                  <span className="text-gray-700">{appointment.motivo_cancelacion}</span>
-                                </p>
-                              )}
-                              {appointment.notes && (
-                                <p className="mt-2 text-sm text-gray-600 italic">
-                                  {appointment.notes}
-                                </p>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="mt-6 flex flex-wrap justify-end gap-2">
-                          <Button
-                            size="sm"
-                            asChild
-                            className="bg-[#007A55] hover:bg-[#006644] text-white shadow-md hover:shadow-lg transition-all duration-300"
-                          >
-                            <Link to={`/dashboard-client/appointment/${appointment.id}/reschedule`}>
-                              <Calendar className="mr-2 h-4 w-4" />
-                              Reagendar
-                            </Link>
-                          </Button>
-                        </div>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
+                  appointment={appointment}
+                  onCancel={handleCancelClick}
+                  onVerifyPayment={verifyPayment}
+                  isVerifyingPayment={isVerifyingPayment}
+                />
               ))}
           </div>
         </TabsContent>
