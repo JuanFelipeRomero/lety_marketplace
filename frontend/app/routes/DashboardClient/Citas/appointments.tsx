@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { Card, CardContent } from "~/components/ui/card";
 import { toast } from "sonner";
 import { useNavigate } from "react-router";
@@ -13,6 +13,7 @@ import {
   Plus,
   Calendar,
   AlertCircle,
+  CreditCard,
 } from "lucide-react";
 import { Link } from "react-router";
 import { Badge } from "~/components/ui/badge";
@@ -28,14 +29,20 @@ import {
 import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
 import { Label } from "~/components/ui/label";
 import { Textarea } from "~/components/ui/textarea";
+import { AppointmentCard } from "~/components/appointment-card";
+import { AppointmentFilters } from "~/components/appointment-filters";
 
 
 interface Appointment {
   id: number;
+  petId: number;
   petName: string;
   petImage: string;
+  clinicId: number;
   clinicName: string;
   clinicAddress: string;
+  serviceId?: number;
+  serviceName?: string;
   date: string;
   time: string;
   reason: string;
@@ -43,6 +50,9 @@ interface Appointment {
   notes?: string;
   motivo_reprogramacion?: string;
   motivo_cancelacion?: string;
+  payment_status?: "pending" | "awaiting_payment" | "paid" | "refunded" | "failed";
+  payment_url?: string;
+  payment_amount?: number;
 }
 
 export default function AppointmentsPage() {
@@ -56,69 +66,208 @@ export default function AppointmentsPage() {
   const [selectedAppointmentId, setSelectedAppointmentId] = useState<number | null>(null);
 
   const token = useAuthStore((state) => state.token);
+  const [isVerifyingPayment, setIsVerifyingPayment] = useState(false);
+
+  // Filter states
+  const [selectedPets, setSelectedPets] = useState<number[]>([]);
+  const [selectedStatuses, setSelectedStatuses] = useState<string[]>([]);
+  const [selectedClinics, setSelectedClinics] = useState<number[]>([]);
+
+  // Derive unique pets and clinics from appointments
+  const uniquePets = useMemo(() => {
+    const petMap = new Map();
+    appointments.forEach((apt) => {
+      if (!petMap.has(apt.petId)) {
+        petMap.set(apt.petId, { id: apt.petId, name: apt.petName });
+      }
+    });
+    return Array.from(petMap.values());
+  }, [appointments]);
+
+  const uniqueClinics = useMemo(() => {
+    const clinicMap = new Map();
+    appointments.forEach((apt) => {
+      if (!clinicMap.has(apt.clinicId)) {
+        clinicMap.set(apt.clinicId, { id: apt.clinicId, name: apt.clinicName });
+      }
+    });
+    return Array.from(clinicMap.values());
+  }, [appointments]);
+
+  // Function to verify payment status with Mercado Pago
+  const verifyPayment = async (appointmentId: number, paymentId?: string) => {
+    if (!token) return;
+
+    setIsVerifyingPayment(true);
+    try {
+      console.log(`🔍 Verifying payment for appointment ${appointmentId}`);
+
+      const response = await fetch(`${API_URL}/payments/verify/${appointmentId}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ payment_id: paymentId }),
+      });
+
+      const data = await response.json();
+
+      if (response.ok) {
+        // Show appropriate message based on payment status
+        if (data.payment_status === 'paid') {
+          toast.success(data.message || '¡Pago confirmado!');
+        } else if (data.mp_status === 'pending') {
+          toast.info(data.message || 'Tu pago está pendiente');
+          // Show pending payment info if available
+          if (data.pending_info) {
+            toast.info(data.pending_info.message, { duration: 8000 });
+          }
+        } else if (data.mp_status === 'rejected') {
+          toast.error(data.message || 'El pago fue rechazado');
+        } else if (data.already_processed) {
+          toast.success(data.message);
+        } else {
+          toast.info(data.message || 'Estado de pago actualizado');
+        }
+
+        // Refresh appointments list
+        fetchAppointments();
+      } else {
+        if (data.requires_payment) {
+          toast.warning(data.message || 'No se encontró ningún pago para esta cita');
+        } else {
+          toast.error(data.message || 'Error al verificar el pago');
+        }
+      }
+    } catch (error) {
+      console.error('Error verifying payment:', error);
+      toast.error('Error al verificar el pago. Por favor intenta nuevamente.');
+    } finally {
+      setIsVerifyingPayment(false);
+    }
+  };
+
+  const fetchAppointments = async () => {
+    try {
+
+      if (!token) {
+        console.error("Token no encontrado");
+        return;
+      }
+
+      const response = await fetch(`${API_URL}/appointments/user`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error("Error al traer citas");
+      }
+
+      const data = await response.json();
+
+      setAppointments(data.citas || []);
+    } catch (error) {
+      console.error("Error trayendo citas:", error);
+    }
+  };
+
+  // Check for payment status on page load (when returning from Mercado Pago)
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const paymentStatus = urlParams.get('payment'); // 'success', 'pending', 'failure'
+    const paymentId = urlParams.get('payment_id') || urlParams.get('collection_id');
+
+    if (paymentStatus && appointments.length > 0) {
+      // Find the most recent appointment with awaiting_payment status
+      const pendingAppointment = appointments.find(
+        apt => apt.payment_status === 'awaiting_payment'
+      );
+
+      if (pendingAppointment) {
+        console.log(`📥 Returned from MP with status: ${paymentStatus}, verifying payment...`);
+        verifyPayment(pendingAppointment.id, paymentId || undefined);
+
+        // Clean URL params after verification
+        window.history.replaceState({}, '', window.location.pathname);
+      }
+    }
+  }, [appointments]);
 
   useEffect(() => {
-    const fetchAppointments = async () => {
-      try {
-
-        if (!token) {
-          console.error("Token no encontrado");
-          return;
-        }
-
-        const response = await fetch(`${API_URL}/appointments/user`, {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        });
-
-        if (!response.ok) {
-          throw new Error("Error al traer citas");
-        }
-
-        const data = await response.json();
-
-        setAppointments(data.citas || []);
-      } catch (error) {
-        console.error("Error trayendo citas:", error);
-      }
-    };
-
     fetchAppointments();
   }, []);
 
-  const filteredAppointments = appointments.filter((appointment) => {
-    const searchLower = searchQuery.toLowerCase();
-    return (
-      appointment.petName.toLowerCase().includes(searchLower) ||
-      appointment.clinicName.toLowerCase().includes(searchLower) ||
-      appointment.reason.toLowerCase().includes(searchLower)
-    );
-  });
+  const filteredAppointments = useMemo(() => {
+    return appointments.filter((appointment) => {
+      // Search filter (expanded)
+      const searchLower = searchQuery.toLowerCase();
+      const matchesSearch =
+        !searchQuery ||
+        appointment.petName.toLowerCase().includes(searchLower) ||
+        appointment.clinicName.toLowerCase().includes(searchLower) ||
+        appointment.reason.toLowerCase().includes(searchLower) ||
+        appointment.serviceName?.toLowerCase().includes(searchLower) ||
+        appointment.notes?.toLowerCase().includes(searchLower);
+
+      // Pet filter
+      const matchesPet =
+        selectedPets.length === 0 || selectedPets.includes(appointment.petId);
+
+      // Status filter
+      const matchesStatus =
+        selectedStatuses.length === 0 ||
+        selectedStatuses.includes(appointment.status);
+
+      // Clinic filter
+      const matchesClinic =
+        selectedClinics.length === 0 ||
+        selectedClinics.includes(appointment.clinicId);
+
+      return matchesSearch && matchesPet && matchesStatus && matchesClinic;
+    });
+  }, [appointments, searchQuery, selectedPets, selectedStatuses, selectedClinics]);
+
+  const handleResetFilters = () => {
+    setSelectedPets([]);
+    setSelectedStatuses([]);
+    setSelectedClinics([]);
+  };
+
+  const handleCancelClick = (appointmentId: number) => {
+    setSelectedAppointmentId(appointmentId);
+    setIsCancelDialogOpen(true);
+  };
 
   const getStatusBadge = (status: Appointment["status"]) => {
     switch (status) {
       case "confirmed":
         return (
-          <Badge className="bg-green-100 text-green-800 hover:bg-green-200">
+          <Badge className="bg-[#007A55] text-white border-0 shadow-md hover:shadow-lg transition-all duration-300 px-3 py-1">
+            <CheckCircle className="mr-1.5 h-4 w-4" />
             Confirmada
           </Badge>
         );
       case "pending":
         return (
-          <Badge className="bg-yellow-100 text-yellow-800 hover:bg-yellow-200">
+          <Badge className="bg-amber-500 text-white border-0 shadow-md hover:shadow-lg transition-all duration-300 px-3 py-1">
+            <Clock className="mr-1.5 h-4 w-4" />
             Pendiente
           </Badge>
         );
       case "completed":
         return (
-          <Badge className="bg-blue-100 text-blue-800 hover:bg-blue-200">
+          <Badge className="bg-slate-600 text-white border-0 shadow-md hover:shadow-lg transition-all duration-300 px-3 py-1">
+            <CheckCircle className="mr-1.5 h-4 w-4" />
             Completada
           </Badge>
         );
       case "cancelled":
         return (
-          <Badge className="bg-red-100 text-red-800 hover:bg-red-200">
+          <Badge className="bg-slate-400 text-white border-0 shadow-md hover:shadow-lg transition-all duration-300 px-3 py-1">
+            <XCircle className="mr-1.5 h-4 w-4" />
             Cancelada
           </Badge>
         );
@@ -128,13 +277,26 @@ export default function AppointmentsPage() {
   const getStatusIcon = (status: Appointment["status"]) => {
     switch (status) {
       case "confirmed":
-        return <CheckCircle className="h-5 w-5 text-green-600" />;
+        return <CheckCircle className="h-6 w-6 text-[#007A55]" />;
       case "pending":
-        return <Clock className="h-5 w-5 text-yellow-600" />;
+        return <Clock className="h-6 w-6 text-amber-500" />;
       case "completed":
-        return <CheckCircle className="h-5 w-5 text-blue-600" />;
+        return <CheckCircle className="h-6 w-6 text-slate-600" />;
       case "cancelled":
-        return <XCircle className="h-5 w-5 text-red-600" />;
+        return <XCircle className="h-6 w-6 text-slate-400" />;
+    }
+  };
+
+  const getStatusBorderColor = (status: Appointment["status"]) => {
+    switch (status) {
+      case "confirmed":
+        return "border-l-[#007A55]";
+      case "pending":
+        return "border-l-amber-500";
+      case "completed":
+        return "border-l-slate-600";
+      case "cancelled":
+        return "border-l-slate-400";
     }
   };
 
@@ -197,13 +359,26 @@ export default function AppointmentsPage() {
           <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
           <Input
             type="search"
-            placeholder="Buscar cita por mascota, clínica o motivo..."
+            placeholder="Buscar por mascota, clínica, servicio, motivo..."
             className="pl-8"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
           />
         </div>
       </div>
+
+      {/* Filters */}
+      <AppointmentFilters
+        pets={uniquePets}
+        clinics={uniqueClinics}
+        selectedPets={selectedPets}
+        selectedStatuses={selectedStatuses}
+        selectedClinics={selectedClinics}
+        onPetsChange={setSelectedPets}
+        onStatusChange={setSelectedStatuses}
+        onClinicsChange={setSelectedClinics}
+        onReset={handleResetFilters}
+      />
 
       <Tabs defaultValue="all" className="space-y-4">
         <TabsList>
@@ -243,106 +418,13 @@ export default function AppointmentsPage() {
           ) : (
             <div className="space-y-4">
               {filteredAppointments.map((appointment) => (
-                <Card key={appointment.id} className="overflow-hidden">
-                  <CardContent className="p-0">
-                    <div className="flex flex-col md:flex-row">
-                      <div className="flex items-center gap-4 border-b p-4 md:w-1/3 md:border-b-0 md:border-r">
-                        <div className="h-12 w-12 overflow-hidden rounded-full bg-muted">
-                          <img
-                            src={appointment.petImage || "/placeholder.svg"}
-                            alt={appointment.petName}
-                            width={48}
-                            height={48}
-                            className="h-full w-full object-cover"
-                          />
-                        </div>
-                        <div>
-                          <h3 className="font-medium">{appointment.petName}</h3>
-                          <p className="text-sm text-muted-foreground">
-                            {appointment.date} • {appointment.time}
-                          </p>
-                        </div>
-                      </div>
-
-                      <div className="flex flex-1 flex-col justify-between p-4">
-                        <div>
-                          <div className="mb-2 flex items-center justify-between">
-                            <h4 className="font-medium">
-                              {appointment.clinicName}
-                            </h4>
-                            {getStatusBadge(appointment.status)}
-                          </div>
-                          <p className="text-sm text-muted-foreground">
-                            {appointment.clinicAddress}
-                          </p>
-                          <div className="mt-2 flex items-start gap-2">
-                            <div className="mt-0.5">
-                              {getStatusIcon(appointment.status)}
-                            </div>
-                            <div>
-                              <p className="text-sm">
-                                <span className="font-medium">Motivo:</span>{" "}
-                                {appointment.reason}
-                              </p>
-                              {appointment.status === "cancelled" && appointment.motivo_cancelacion && (
-                                <p className="text-sm">
-                                 <span className="font-medium">Motivo de cancelación:</span>{" "}
-                                  {appointment.motivo_cancelacion}
-                                </p>
-                              )}
-
-                              {appointment.status !== "cancelled" && appointment.motivo_reprogramacion && (
-                                <p className="text-sm">
-                                  <span className="font-medium">Motivo de reprogramación:</span>{" "}
-                                  {appointment.motivo_reprogramacion}
-                                </p>
-                              )}
-                              {appointment.notes && (
-                                <p className="mt-1 text-sm text-muted-foreground">
-                                  {appointment.notes}
-                                </p>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="mt-4 flex justify-end gap-2">
-                          {(appointment.status === "confirmed" ||
-                            appointment.status === "pending") && (
-                            <Button variant="outline" size="sm" asChild>
-                              <Link
-                                to={`/dashboard-client/appointment/${appointment.id}/reschedule`}
-                              >
-                                Reprogramar
-                              </Link>
-                            </Button>
-                          )}
-                          {(appointment.status === "confirmed" ||
-                            appointment.status === "pending") && (
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="text-red-600 hover:bg-red-50 hover:text-red-700"
-                              onClick={() => {
-                                setSelectedAppointmentId(appointment.id);
-                                setIsCancelDialogOpen(true);
-                              }}
-                            >
-                              Cancelar
-                            </Button>
-                          )}
-                          <Button size="sm" asChild>
-                            <Link
-                              to={`/dashboard-client/appointments/${appointment.id}`}
-                            >
-                              Ver Detalles
-                            </Link>
-                          </Button>
-                        </div>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
+                <AppointmentCard
+                  key={appointment.id}
+                  appointment={appointment}
+                  onCancel={handleCancelClick}
+                  onVerifyPayment={verifyPayment}
+                  isVerifyingPayment={isVerifyingPayment}
+                />
               ))}
             </div>
           )}
@@ -357,85 +439,13 @@ export default function AppointmentsPage() {
                   appointment.status === "pending"
               )
               .map((appointment) => (
-                <Card key={appointment.id} className="overflow-hidden">
-                  <CardContent className="p-0">
-                    <div className="flex flex-col md:flex-row">
-                      <div className="flex items-center gap-4 border-b p-4 md:w-1/3 md:border-b-0 md:border-r">
-                        <div className="h-12 w-12 overflow-hidden rounded-full bg-muted">
-                          <img
-                            src={appointment.petImage || "/placeholder.svg"}
-                            alt={appointment.petName}
-                            width={48}
-                            height={48}
-                            className="h-full w-full object-cover"
-                          />
-                        </div>
-                        <div>
-                          <h3 className="font-medium">{appointment.petName}</h3>
-                          <p className="text-sm text-muted-foreground">
-                            {appointment.date} • {appointment.time}
-                          </p>
-                        </div>
-                      </div>
-
-                      <div className="flex flex-1 flex-col justify-between p-4">
-                        <div>
-                          <div className="mb-2 flex items-center justify-between">
-                            <h4 className="font-medium">
-                              {appointment.clinicName}
-                            </h4>
-                            {getStatusBadge(appointment.status)}
-                          </div>
-                          <p className="text-sm text-muted-foreground">
-                            {appointment.clinicAddress}
-                          </p>
-                          <div className="mt-2 flex items-start gap-2">
-                            <div className="mt-0.5">
-                              {getStatusIcon(appointment.status)}
-                            </div>
-                            <div>
-                              <p className="text-sm">
-                                <span className="font-medium">Motivo:</span>{" "}
-                                {appointment.reason}
-                              </p>
-                              {appointment.motivo_reprogramacion && (
-                                <p className="mt-1 text-sm text-muted-foreground">
-                                  <span className="font-medium">Motivo de reprogramación:</span>{" "}
-                                  {appointment.motivo_reprogramacion}
-                                </p>
-                              )}
-                              {appointment.notes && (
-                                <p className="mt-1 text-sm text-muted-foreground">
-                                  {appointment.notes}
-                                </p>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="mt-4 flex justify-end gap-2">
-                          <Button variant="outline" size="sm">
-                            Reprogramar
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="text-red-600 hover:bg-red-50 hover:text-red-700"
-                          >
-                            Cancelar
-                          </Button>
-                          <Button size="sm" asChild>
-                            <Link
-                              to={`/pet-dashboard/appointments/${appointment.id}`}
-                            >
-                              Ver Detalles
-                            </Link>
-                          </Button>
-                        </div>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
+                <AppointmentCard
+                  key={appointment.id}
+                  appointment={appointment}
+                  onCancel={handleCancelClick}
+                  onVerifyPayment={verifyPayment}
+                  isVerifyingPayment={isVerifyingPayment}
+                />
               ))}
           </div>
         </TabsContent>
@@ -445,69 +455,13 @@ export default function AppointmentsPage() {
             {filteredAppointments
               .filter((appointment) => appointment.status === "completed")
               .map((appointment) => (
-                <Card key={appointment.id} className="overflow-hidden">
-                  <CardContent className="p-0">
-                    <div className="flex flex-col md:flex-row">
-                      <div className="flex items-center gap-4 border-b p-4 md:w-1/3 md:border-b-0 md:border-r">
-                        <div className="h-12 w-12 overflow-hidden rounded-full bg-muted">
-                          <img
-                            src={appointment.petImage || "/placeholder.svg"}
-                            alt={appointment.petName}
-                            width={48}
-                            height={48}
-                            className="h-full w-full object-cover"
-                          />
-                        </div>
-                        <div>
-                          <h3 className="font-medium">{appointment.petName}</h3>
-                          <p className="text-sm text-muted-foreground">
-                            {appointment.date} • {appointment.time}
-                          </p>
-                        </div>
-                      </div>
-
-                      <div className="flex flex-1 flex-col justify-between p-4">
-                        <div>
-                          <div className="mb-2 flex items-center justify-between">
-                            <h4 className="font-medium">
-                              {appointment.clinicName}
-                            </h4>
-                            {getStatusBadge(appointment.status)}
-                          </div>
-                          <p className="text-sm text-muted-foreground">
-                            {appointment.clinicAddress}
-                          </p>
-                          <div className="mt-2 flex items-start gap-2">
-                            <div className="mt-0.5">
-                              {getStatusIcon(appointment.status)}
-                            </div>
-                            <div>
-                              <p className="text-sm">
-                                <span className="font-medium">Motivo:</span>{" "}
-                                {appointment.reason}
-                              </p>
-                              {appointment.notes && (
-                                <p className="mt-1 text-sm text-muted-foreground">
-                                  {appointment.notes}
-                                </p>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="mt-4 flex justify-end gap-2">
-                          <Button size="sm" asChild>
-                            <Link
-                              to={`/pet-dashboard/appointments/${appointment.id}`}
-                            >
-                              Ver Detalles
-                            </Link>
-                          </Button>
-                        </div>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
+                <AppointmentCard
+                  key={appointment.id}
+                  appointment={appointment}
+                  onCancel={handleCancelClick}
+                  onVerifyPayment={verifyPayment}
+                  isVerifyingPayment={isVerifyingPayment}
+                />
               ))}
           </div>
         </TabsContent>
@@ -517,67 +471,13 @@ export default function AppointmentsPage() {
             {filteredAppointments
               .filter((appointment) => appointment.status === "cancelled")
               .map((appointment) => (
-                <Card key={appointment.id} className="overflow-hidden">
-                  <CardContent className="p-0">
-                    <div className="flex flex-col md:flex-row">
-                      <div className="flex items-center gap-4 border-b p-4 md:w-1/3 md:border-b-0 md:border-r">
-                        <div className="h-12 w-12 overflow-hidden rounded-full bg-muted">
-                          <img
-                            src={appointment.petImage || "/placeholder.svg"}
-                            alt={appointment.petName}
-                            width={48}
-                            height={48}
-                            className="h-full w-full object-cover"
-                          />
-                        </div>
-                        <div>
-                          <h3 className="font-medium">{appointment.petName}</h3>
-                          <p className="text-sm text-muted-foreground">
-                            {appointment.date} • {appointment.time}
-                          </p>
-                        </div>
-                      </div>
-
-                      <div className="flex flex-1 flex-col justify-between p-4">
-                        <div>
-                          <div className="mb-2 flex items-center justify-between">
-                            <h4 className="font-medium">
-                              {appointment.clinicName}
-                            </h4>
-                            {getStatusBadge(appointment.status)}
-                          </div>
-                          <p className="text-sm text-muted-foreground">
-                            {appointment.clinicAddress}
-                          </p>
-                          <div className="mt-2 flex items-start gap-2">
-                            <div className="mt-0.5">
-                              {getStatusIcon(appointment.status)}
-                            </div>
-                            <div>
-                              <p className="text-sm">
-                                <span className="font-medium">Motivo:</span>{" "}
-                                {appointment.reason}
-                              </p>
-                              {appointment.notes && (
-                                <p className="mt-1 text-sm text-muted-foreground">
-                                  {appointment.notes}
-                                </p>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="mt-4 flex justify-end gap-2">
-                          <Button size="sm" asChild>
-                            <Link to={`/dashboard-client/appointment/${appointment.id}/reschedule`}>
-                              Reagendar
-                            </Link>
-                          </Button>
-                        </div>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
+                <AppointmentCard
+                  key={appointment.id}
+                  appointment={appointment}
+                  onCancel={handleCancelClick}
+                  onVerifyPayment={verifyPayment}
+                  isVerifyingPayment={isVerifyingPayment}
+                />
               ))}
           </div>
         </TabsContent>

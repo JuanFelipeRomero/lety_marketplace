@@ -1,8 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "~/components/ui/card";
 import { Badge } from "~/components/ui/badge";
 import { Avatar, AvatarImage, AvatarFallback } from "~/components/ui/avatar";
 import { Button } from "~/components/ui/button";
+import { Input } from "~/components/ui/input";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "~/components/ui/tabs";
 import {
   CheckCircle,
   XCircle,
@@ -13,6 +15,8 @@ import {
   Trash,
   Calendar,
   Clock,
+  Search,
+  CalendarDays,
 } from "lucide-react";
 import { useAuthStore } from "~/stores/useAuthStore";
 import {
@@ -25,6 +29,8 @@ import {
 } from "~/components/ui/dialog";
 import { Textarea } from "~/components/ui/textarea";
 import { toast } from "react-hot-toast";
+import { VetAppointmentCard } from "~/components/vet-appointment-card";
+import { VetAppointmentFilters } from "~/components/vet-appointment-filters";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3001";
 
@@ -102,6 +108,13 @@ export default function VetAppointmentsPage() {
     servicios_adicionales: [],
     productos_vendidos: [],
   });
+
+  // Estados para filtros y búsqueda
+  const [searchQuery, setSearchQuery] = useState("");
+  const [selectedTab, setSelectedTab] = useState("all");
+  const [selectedPets, setSelectedPets] = useState<number[]>([]);
+  const [selectedStatuses, setSelectedStatuses] = useState<string[]>([]);
+  const [selectedOwners, setSelectedOwners] = useState<number[]>([]);
 
   const token = useAuthStore((state) => state.token);
 
@@ -497,176 +510,265 @@ export default function VetAppointmentsPage() {
     }
   };
 
+  // Preparar datos para filtros
+  const filterOptions = useMemo(() => {
+    const pets = Array.from(
+      new Map(
+        appointments.map((app) => [app.petName, { id: app.id, name: app.petName }])
+      ).values()
+    );
+
+    const owners = Array.from(
+      new Map(
+        appointments.map((app) => [
+          app.ownerName,
+          { id: app.id, name: app.ownerName },
+        ])
+      ).values()
+    );
+
+    return { pets, owners };
+  }, [appointments]);
+
+  // Lógica de filtrado y búsqueda
+  const filteredAppointments = useMemo(() => {
+    let filtered = appointments;
+
+    // Filtrar por búsqueda
+    if (searchQuery) {
+      const query = searchQuery.toLowerCase();
+      filtered = filtered.filter(
+        (app) =>
+          app.petName.toLowerCase().includes(query) ||
+          app.ownerName.toLowerCase().includes(query) ||
+          app.reason.toLowerCase().includes(query) ||
+          app.ownerEmail.toLowerCase().includes(query) ||
+          app.ownerPhone.toLowerCase().includes(query)
+      );
+    }
+
+    // Filtrar por mascotas seleccionadas
+    if (selectedPets.length > 0) {
+      filtered = filtered.filter((app) => selectedPets.includes(app.id));
+    }
+
+    // Filtrar por dueños seleccionados
+    if (selectedOwners.length > 0) {
+      filtered = filtered.filter((app) => selectedOwners.includes(app.id));
+    }
+
+    // Filtrar por estados seleccionados
+    if (selectedStatuses.length > 0) {
+      filtered = filtered.filter((app) =>
+        selectedStatuses.includes(app.status)
+      );
+    }
+
+    // Filtrar por tab (estado general)
+    switch (selectedTab) {
+      case "pending":
+        filtered = filtered.filter((app) => app.status.toLowerCase() === "pendiente");
+        break;
+      case "confirmed":
+        filtered = filtered.filter((app) => app.status.toLowerCase() === "confirmada");
+        break;
+      case "completed":
+        filtered = filtered.filter(
+          (app) => app.status.toLowerCase() === "finalizada" || app.status.toLowerCase() === "completada"
+        );
+        break;
+      case "cancelled":
+        filtered = filtered.filter(
+          (app) => app.status.toLowerCase() === "cancelada" || app.status.toLowerCase() === "rechazada"
+        );
+        break;
+    }
+
+    return filtered;
+  }, [appointments, searchQuery, selectedPets, selectedOwners, selectedStatuses, selectedTab]);
+
+  // Contador de citas por estado
+  const appointmentCounts = useMemo(() => {
+    return {
+      all: appointments.length,
+      pending: appointments.filter((app) => app.status.toLowerCase() === "pendiente").length,
+      confirmed: appointments.filter((app) => app.status.toLowerCase() === "confirmada").length,
+      completed: appointments.filter(
+        (app) => app.status.toLowerCase() === "finalizada" || app.status.toLowerCase() === "completada"
+      ).length,
+      cancelled: appointments.filter(
+        (app) => app.status.toLowerCase() === "cancelada" || app.status.toLowerCase() === "rechazada"
+      ).length,
+    };
+  }, [appointments]);
+
+  const handleResetFilters = () => {
+    setSelectedPets([]);
+    setSelectedStatuses([]);
+    setSelectedOwners([]);
+  };
+
   return (
-    <div className="p-4">
-      <Card>
-        <CardHeader>
-          <CardTitle>Citas reservadas</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {loading && <div>Cargando citas...</div>}
-          {error && <div className="text-red-500">{error}</div>}
-          {!loading && !error && appointments.length === 0 && (
-            <div>No hay citas reservadas.</div>
-          )}
-          {!loading && !error && appointments.length > 0 && (
-            <div className="flex flex-col gap-4">
-              {appointments.map((a) => (
-                <div
-                  key={a.id}
-                  className="bg-white rounded-2xl shadow-sm p-4 flex flex-col md:flex-row md:items-start justify-between gap-4 border"
-                >
-                  {/* Izquierda: Avatar + info del dueño */}
-                  <div className="flex items-start gap-4 w-full md:w-[250px]">
-                    <Avatar className="h-12 w-12">
-                      <AvatarImage src={a.petImage} alt={a.petName} />
-                      <AvatarFallback>{a.petName[0]}</AvatarFallback>
-                    </Avatar>
-                    <div className="flex flex-col">
-                      <span className="font-semibold text-base">
-                        {a.petName}
-                      </span>
-                      <span className="text-sm text-muted-foreground">
-                        {a.ownerName}
-                      </span>
-                      <div className="mt-1 flex gap-1 flex-wrap text-xs text-muted-foreground">
-                        <span>{a.ownerEmail}</span>
-                        <span>•</span>
-                        <span>{a.ownerPhone}</span>
-                      </div>
-                    </div>
+    <div className="container mx-auto p-4 max-w-7xl">
+      <div className="mb-6">
+        <div className="flex items-center justify-between mb-6">
+          <div>
+            <h1 className="text-3xl font-bold text-gray-900 flex items-center gap-3">
+              <CalendarDays className="h-8 w-8 text-[#007A55]" />
+              Citas Veterinarias
+            </h1>
+            <p className="text-gray-600 mt-1">
+              Gestiona las citas programadas con tus clientes
+            </p>
+          </div>
+        </div>
+
+        {/* Search Bar */}
+        <div className="mb-4">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-5 w-5 text-gray-400" />
+            <Input
+              type="text"
+              placeholder="Buscar por mascota, dueño, motivo, email o teléfono..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="pl-10 h-12 text-base border-slate-300 focus:border-[#007A55] focus:ring-[#007A55]"
+            />
+          </div>
+        </div>
+
+        {/* Filters */}
+        <VetAppointmentFilters
+          pets={filterOptions.pets}
+          owners={filterOptions.owners}
+          selectedPets={selectedPets}
+          selectedStatuses={selectedStatuses}
+          selectedOwners={selectedOwners}
+          onPetsChange={setSelectedPets}
+          onStatusChange={setSelectedStatuses}
+          onOwnersChange={setSelectedOwners}
+          onReset={handleResetFilters}
+        />
+      </div>
+
+      {/* Tabs */}
+      <Tabs value={selectedTab} onValueChange={setSelectedTab} className="w-full">
+        <TabsList className="grid w-full grid-cols-5 mb-6 h-12">
+          <TabsTrigger value="all" className="text-sm font-medium">
+            Todas
+            {appointmentCounts.all > 0 && (
+              <Badge variant="secondary" className="ml-2 bg-slate-200">
+                {appointmentCounts.all}
+              </Badge>
+            )}
+          </TabsTrigger>
+          <TabsTrigger value="pending" className="text-sm font-medium">
+            Pendientes
+            {appointmentCounts.pending > 0 && (
+              <Badge variant="secondary" className="ml-2 bg-amber-100 text-amber-700">
+                {appointmentCounts.pending}
+              </Badge>
+            )}
+          </TabsTrigger>
+          <TabsTrigger value="confirmed" className="text-sm font-medium">
+            Confirmadas
+            {appointmentCounts.confirmed > 0 && (
+              <Badge variant="secondary" className="ml-2 bg-green-100 text-green-700">
+                {appointmentCounts.confirmed}
+              </Badge>
+            )}
+          </TabsTrigger>
+          <TabsTrigger value="completed" className="text-sm font-medium">
+            Completadas
+            {appointmentCounts.completed > 0 && (
+              <Badge variant="secondary" className="ml-2 bg-slate-200">
+                {appointmentCounts.completed}
+              </Badge>
+            )}
+          </TabsTrigger>
+          <TabsTrigger value="cancelled" className="text-sm font-medium">
+            Canceladas
+            {appointmentCounts.cancelled > 0 && (
+              <Badge variant="secondary" className="ml-2 bg-red-100 text-red-700">
+                {appointmentCounts.cancelled}
+              </Badge>
+            )}
+          </TabsTrigger>
+        </TabsList>
+
+        {/* Tab Content */}
+        {["all", "pending", "confirmed", "completed", "cancelled"].map((tab) => (
+          <TabsContent key={tab} value={tab} className="mt-0">
+            {loading ? (
+              <Card>
+                <CardContent className="p-12">
+                  <div className="flex flex-col items-center justify-center text-gray-500">
+                    <RefreshCw className="h-12 w-12 animate-spin mb-4 text-[#007A55]" />
+                    <p>Cargando citas...</p>
                   </div>
-
-                  {/* Centro: Detalles de la cita */}
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm flex-1">
-                    <div>
-                      <span className="font-medium text-muted-foreground">
-                        Fecha:
-                      </span>
-                      <br />
-                      {a.date}
-                    </div>
-                    <div>
-                      <span className="font-medium text-muted-foreground">
-                        Hora:
-                      </span>
-                      <br />
-                      {a.time}
-                    </div>
-                    <div>
-                      <span className="font-medium text-muted-foreground">
-                        Motivo:
-                      </span>
-                      <br />
-                      {a.reason}
-                    </div>
-                    <div>
-                      <span className="font-medium text-muted-foreground">
-                        Notas:
-                      </span>
-                      <br />
-                      {a.notes || "-"}
-                    </div>
+                </CardContent>
+              </Card>
+            ) : error ? (
+              <Card>
+                <CardContent className="p-12">
+                  <div className="flex flex-col items-center justify-center text-red-500">
+                    <XCircle className="h-12 w-12 mb-4" />
+                    <p className="font-semibold">Error al cargar las citas</p>
+                    <p className="text-sm text-gray-600 mt-2">{error}</p>
                   </div>
-
-                  {/* Derecha: Estado + acciones */}
-                  <div className="flex flex-col items-end gap-2 w-full md:w-[200px]">
-                    <Badge
-                      variant={
-                        a.status === "pendiente"
-                          ? "secondary"
-                          : a.status === "confirmada"
-                          ? "default"
-                          : a.status === "rechazada"
-                          ? "destructive"
-                          : "outline"
-                      }
-                      className="capitalize"
-                    >
-                      {a.status === "reprogramacion_sugerida"
-                        ? "Reprogramación"
-                        : a.status}
-                    </Badge>
-
-                    <div className="flex flex-wrap gap-2 mt-2 justify-end">
-                      <Button
-                        size="sm"
-                        variant={
-                          a.status === "confirmada" ? "outline" : "default"
-                        }
-                        disabled={
-                          updatingAppointment ||
-                          a.status === "confirmada" ||
-                          a.status === "finalizada"
-                        }
-                        onClick={() => handleActionStart(a, "confirmada")}
-                      >
-                        <CheckCircle className="h-4 w-4 mr-1" />
-                        {a.status === "confirmada" ? "Confirmada" : "Confirmar"}
-                      </Button>
-
-                      <Button
-                        size="sm"
-                        variant={
-                          a.status === "rechazada" ? "outline" : "destructive"
-                        }
-                        disabled={
-                          updatingAppointment ||
-                          a.status === "rechazada" ||
-                          a.status === "finalizada"
-                        }
-                        onClick={() => handleActionStart(a, "rechazada")}
-                      >
-                        <XCircle className="h-4 w-4 mr-1" />
-                        {a.status === "rechazada" ? "Rechazada" : "Rechazar"}
-                      </Button>
-
-                      <Button
-                        size="sm"
-                        variant={
-                          a.status === "reprogramacion_sugerida"
-                            ? "outline"
-                            : "secondary"
-                        }
-                        disabled={
-                          updatingAppointment ||
-                          a.status === "reprogramacion_sugerida" ||
-                          a.status === "finalizada" ||
-                          a.status === "rechazada"
-                        }
-                        onClick={() => handleReprogramarStart(a)}
-                      >
-                        <CalendarClock className="h-4 w-4 mr-1" />
-                        {a.status === "reprogramacion_sugerida"
-                          ? "Reprogramada"
-                          : "Reprogramar"}
-                      </Button>
-
-                      {/* Botón para finalizar cita, solo habilitado si está confirmada */}
-                      <Button
-                        size="sm"
-                        variant={
-                          a.status === "finalizada" ? "outline" : "default"
-                        }
-                        disabled={
-                          updatingAppointment ||
-                          a.status === "finalizada" ||
-                          a.status === "rechazada" ||
-                          a.status !== "confirmada" // Solo disponible si está confirmada
-                        }
-                        onClick={() => handleFinalizarStart(a)}
-                      >
-                        <ClipboardCheck className="h-4 w-4 mr-1" />
-                        {a.status === "finalizada" ? "Finalizada" : "Finalizar"}
-                      </Button>
-                    </div>
+                </CardContent>
+              </Card>
+            ) : filteredAppointments.length === 0 ? (
+              <Card>
+                <CardContent className="p-12">
+                  <div className="flex flex-col items-center justify-center text-gray-500">
+                    <CalendarDays className="h-16 w-16 mb-4 text-gray-300" />
+                    <p className="text-lg font-semibold">No hay citas para mostrar</p>
+                    <p className="text-sm text-gray-600 mt-2">
+                      {searchQuery || selectedPets.length > 0 || selectedStatuses.length > 0 || selectedOwners.length > 0
+                        ? "Intenta ajustar los filtros de búsqueda"
+                        : "Las nuevas citas aparecerán aquí"}
+                    </p>
                   </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </CardContent>
-      </Card>
+                </CardContent>
+              </Card>
+            ) : (
+              <div className="space-y-4">
+                {filteredAppointments.map((appointment) => {
+                  // Transformar datos al formato del nuevo componente
+                  const transformedAppointment = {
+                    id_cita: appointment.id,
+                    id_mascota: 0, // No disponible en el formato actual
+                    nombre_mascota: appointment.petName,
+                    foto_mascota: appointment.petImage,
+                    id_usuario: 0, // No disponible en el formato actual
+                    nombre_usuario: appointment.ownerName,
+                    correo_usuario: appointment.ownerEmail,
+                    telefono_usuario: appointment.ownerPhone,
+                    fecha_inicio: appointment.date,
+                    fecha_fin: appointment.date,
+                    estado: appointment.status,
+                    motivo: appointment.reason,
+                    notas_adicionales: appointment.notes,
+                  };
+
+                  return (
+                    <VetAppointmentCard
+                      key={appointment.id}
+                      appointment={transformedAppointment}
+                      onConfirm={() => handleActionStart(appointment, "confirmada")}
+                      onReject={() => handleActionStart(appointment, "rechazada")}
+                      onReschedule={() => handleReprogramarStart(appointment)}
+                      onFinalize={() => handleFinalizarStart(appointment)}
+                      onViewDetails={() => console.log("Ver detalles", appointment.id)}
+                    />
+                  );
+                })}
+              </div>
+            )}
+          </TabsContent>
+        ))}
+      </Tabs>
 
       {/* Diálogo para confirmar/rechazar citas */}
       <Dialog

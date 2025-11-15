@@ -22,7 +22,11 @@ export default [
     route(
       "dashboard-vet/services",
       "routes/DashboardVet/ServicesVet/index.tsx"
-    ), // Ruta para general information
+    ), // Ruta para servicios
+    route(
+      "dashboard-vet/earnings",
+      "routes/dashboard-vet/earnings.tsx"
+    ), // Ruta para ver ganancias de la clínica
   ]),
   layout("layouts/DashboardLayoutClient/index.tsx", [
     route("dashboard-client", "routes/DashboardClient/index.tsx"),
@@ -41,6 +45,10 @@ export default [
     route(
       "dashboard-client/appointments/:id",
       "routes/DashboardClient/Citas/ID_citas/id-schedule.tsx"
+    ),
+    route(
+      "dashboard-client/appointments/:id/payment",
+      "routes/dashboard-client/appointments/$id/payment.tsx"
     ),
     route(
       "dashboard-client/appointment/:id/reschedule",

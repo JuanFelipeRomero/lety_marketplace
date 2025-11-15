@@ -10,6 +10,7 @@ import photosRoutes from "./fotos.js";
 import appoinmentRoutes from "./citas.js";
 import pets from "./mascotas.js";
 import placesRoutes from "./places.js"; // Import the new places routes
+import paymentRoutes from "./payments.js"; // Import payment routes (simplified - no OAuth)
 
 const router = express.Router();
 
@@ -44,5 +45,8 @@ router.use("/", appoinmentRoutes);
 router.use("/", pets);
 // Rutas de Google Places API (proxy)
 router.use("/", placesRoutes);
+
+// Rutas de pagos (simplified Mercado Pago integration)
+router.use("/payments", paymentRoutes);
 
 export default router;

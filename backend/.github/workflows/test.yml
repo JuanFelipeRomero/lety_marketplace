@@ -1,0 +1,68 @@
+name: Backend Tests
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - "backend/**"
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - "backend/**"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        node-version: [18.x, 20.x]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Use Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: "npm"
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install dependencies
+        run: |
+          cd backend
+          npm ci
+
+      - name: Create test environment file
+        run: |
+          cd backend
+          echo "NODE_ENV=test" > .env.test
+          echo "PORT=3001" >> .env.test
+          echo "SUPABASE_URL=${{ secrets.TEST_SUPABASE_URL }}" >> .env.test
+          echo "SERVICE_ROL_KEY=${{ secrets.TEST_SERVICE_ROL_KEY }}" >> .env.test
+          echo "JWT_SECRET=${{ secrets.TEST_JWT_SECRET }}" >> .env.test
+
+      - name: Run unit tests
+        run: |
+          cd backend
+          npm run test:unit
+
+      - name: Run integration tests
+        run: |
+          cd backend
+          npm run test:integration
+
+      - name: Run all tests with coverage
+        run: |
+          cd backend
+          npm run test:coverage
+
+      - name: Upload coverage reports
+        uses: codecov/codecov-action@v3
+        with:
+          file: ./backend/coverage/lcov.info
+          directory: ./backend/coverage/
+          flags: backend
+          name: backend-coverage
+          fail_ci_if_error: false

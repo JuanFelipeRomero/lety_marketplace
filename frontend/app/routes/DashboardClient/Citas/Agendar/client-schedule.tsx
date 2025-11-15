@@ -16,6 +16,7 @@ import {
 import { Separator } from "~/components/ui/separator";
 import { ScrollArea } from "~/components/ui/scroll-area";
 import { AppointmentScheduler } from "~/components/appoinment-scheduler";
+import ClinicDefaultImage from "~/routes/DashboardClient/BusquedaVeterinarias/ClinicDefaultImage";
 
 export default function ScheduleAppointmentPage() {
   const router = useNavigate();
@@ -49,16 +50,25 @@ export default function ScheduleAppointmentPage() {
         }
 
         const data = await response.json();
-        const clinicsFormateadas = data.clinicas.map((clinica: any) => ({
-          id: clinica.id_clinica,
-          name: clinica.nombre,
-          image: clinica.certificado_url || "/placeholder.svg",
-          rating: 4.5,
-          address: clinica.direccion,
-          distance: "1.2 km",
-          availability: "Disponible hoy",
-          reviews: 120,
-        }));
+        const clinicsFormateadas = data.clinicas.map((clinica: any) => {
+          // Obtener la foto principal o la primera foto disponible
+          let imageUrl = "/placeholder.svg";
+          if (clinica.photos && clinica.photos.length > 0) {
+            const principalPhoto = clinica.photos.find((photo: any) => photo.es_principal);
+            imageUrl = principalPhoto ? principalPhoto.url : clinica.photos[0].url;
+          }
+
+          return {
+            id: clinica.id_clinica,
+            name: clinica.nombre,
+            image: imageUrl,
+            rating: 4.5,
+            address: clinica.direccion,
+            distance: "1.2 km",
+            availability: "Disponible hoy",
+            reviews: 120,
+          };
+        });
         setClinics(clinicsFormateadas);
       } catch (error) {
         console.error("Error:", error);
@@ -194,12 +204,19 @@ export default function ScheduleAppointmentPage() {
                       <CardContent className="p-0">
                         <div className="flex flex-col md:flex-row">
                           <div className="relative md:w-1/4">
-                            <div className="aspect-video md:h-full w-full">
-                              <img
-                                src={clinic.image || "/placeholder.svg"}
-                                alt={clinic.name}
-                                className="object-cover"
-                              />
+                            <div className="aspect-video md:h-full w-full overflow-hidden">
+                              {clinic.image && clinic.image !== "/placeholder.svg" ? (
+                                <img
+                                  src={clinic.image}
+                                  alt={clinic.name}
+                                  className="object-cover w-full h-full"
+                                />
+                              ) : (
+                                <ClinicDefaultImage
+                                  clinicName={clinic.name}
+                                  className="w-full h-full"
+                                />
+                              )}
                             </div>
                             {clinic.featured && (
                               <Badge className="absolute left-2 top-2 bg-primary">
@@ -269,12 +286,19 @@ export default function ScheduleAppointmentPage() {
                       <CardContent className="p-0">
                         <div className="flex flex-col md:flex-row">
                           <div className="relative md:w-1/4">
-                            <div className="aspect-video md:h-full w-full">
-                              <img
-                                src={clinic.image || "/placeholder.svg"}
-                                alt={clinic.name}
-                                className="object-cover"
-                              />
+                            <div className="aspect-video md:h-full w-full overflow-hidden">
+                              {clinic.image && clinic.image !== "/placeholder.svg" ? (
+                                <img
+                                  src={clinic.image}
+                                  alt={clinic.name}
+                                  className="object-cover w-full h-full"
+                                />
+                              ) : (
+                                <ClinicDefaultImage
+                                  clinicName={clinic.name}
+                                  className="w-full h-full"
+                                />
+                              )}
                             </div>
                             {clinic.featured && (
                               <Badge className="absolute left-2 top-2 bg-primary">

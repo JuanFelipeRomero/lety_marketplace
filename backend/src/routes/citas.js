@@ -2,6 +2,19 @@ import express from "express";
 import jwt from "jsonwebtoken";
 import dotenv from "dotenv";
 import { createClient } from "@supabase/supabase-js";
+import {
+  validateCompleteAppointment,
+  validateClinicStatus,
+  validateServiceAvailability,
+  validateBusinessHours,
+  validateBookingWindow,
+  validateTimeSlotGranularity,
+  checkAppointmentConflicts,
+} from "../utils/appointmentValidation.js";
+import {
+  MercadoPagoPreferenceService,
+  MercadoPagoUtils,
+} from "../services/mercadopago.js";
 
 dotenv.config();
 
@@ -36,20 +49,23 @@ const authenticateToken = (req, res, next) => {
 router.use(authenticateToken);
 
 // Ruta para agendar citas
-router.post("/appointments/schedule", async (req, res) => {
+router.post('/appointments/schedule', async (req, res) => {
+  // 1. OBTENER USUARIO AUTENTICADO
   const { userId, userType } = req.user;
 
-  if (userType !== "owner") {
+  // 2. VALIDACIÓN DE ROL
+  if (userType !== 'owner') {
     return res
       .status(403)
-      .json({ message: "Solo los dueños de mascotas pueden agendar citas" });
+      .json({ message: 'Solo los dueños de mascotas pueden agendar citas' });
   }
 
+  // 3. OBTENER DATOS DEL BODY
   const {
     petId,
     serviceId,
-    date,
-    timeSlot,
+    date, // Se espera "YYYY-MM-DD"
+    timeSlot, // Se espera "HH:MM"
     reason,
     notes,
     reminderPreference,
@@ -57,76 +73,141 @@ router.post("/appointments/schedule", async (req, res) => {
     clinicId,
   } = req.body;
 
-  if (!petId || !serviceId || !date || !timeSlot || acceptedTerms !== true) {
+  // 4. VALIDACIÓN DE DATOS MÍNIMOS
+  if (
+    !petId ||
+    !serviceId ||
+    !date ||
+    !timeSlot ||
+    !clinicId ||
+    acceptedTerms !== true
+  ) {
     return res
       .status(400)
-      .json({ message: "Datos de cita incompletos o inválidos." });
+      .json({ message: 'Datos de cita incompletos o inválidos.' });
   }
 
   try {
-    // Validar que la mascota pertenezca al usuario
+    // 5. VALIDAR PERTENENCIA DE LA MASCOTA
     const { data: pet, error: petError } = await supabase
-      .from("mascotas")
-      .select("id_usuario")
-      .eq("id_mascota", petId)
+      .from('mascotas')
+      .select('id_usuario')
+      .eq('id_mascota', petId)
+      .eq('id_usuario', userId) // <-- Se comprueba la pertenencia en la consulta
       .single();
 
     if (petError || !pet) {
-      return res.status(404).json({ message: "Mascota no encontrada" });
-    }
-
-    if (pet.id_usuario !== userId) {
       return res
-        .status(403)
-        .json({ message: "No tienes permiso para agendar con esta mascota" });
+        .status(404)
+        .json({ message: 'Mascota no encontrada o no pertenece a este usuario' });
     }
 
-    // Validar formato de fecha
-    if (isNaN(Date.parse(date))) {
-      return res.status(400).json({ message: "Fecha inválida." });
+    // 6. OBTENER DURACIÓN DEL SERVICIO
+    const { data: servicio, error: errorServicio } = await supabase
+      .from('servicios')
+      .select('duracion_minutos')
+      .eq('id_servicio', serviceId)
+      .single();
+
+    if (errorServicio || !servicio) {
+      return res.status(404).json({ message: 'Servicio no encontrado' });
     }
 
+    // Asegurarse de que 'duracion_minutos' existe y es válido
+    const duracion = servicio.duracion_minutos || 30; // 30 min por defecto
+
+    // 7. CALCULAR MARCO DE TIEMPO DE LA CITA
+    const isoStartTime = `${date}T${timeSlot}:00`;
+    const fecha_inicio = new Date(isoStartTime);
+
+    // Validar formato de fecha/hora
+    if (isNaN(fecha_inicio.getTime())) {
+      return res.status(400).json({
+        message:
+          'Formato de fecha u hora inválido. Use YYYY-MM-DD y HH:MM.',
+      });
+    }
+
+    // Validar que la cita no sea en el pasado
+    if (fecha_inicio < new Date(Date.now() - 5 * 60000)) {
+      // 5 min de margen
+      return res
+        .status(400)
+        .json({ message: 'No se pueden agendar citas en el pasado.' });
+    }
+
+    const fecha_fin = new Date(
+      fecha_inicio.getTime() + duracion * 60000
+    );
+
+    // 8. VALIDACIÓN COMPLETA (Estado de clínica, horarios, ventanas, conflictos)
+    const validation = await validateCompleteAppointment({
+      supabase,
+      clinicId,
+      serviceId,
+      fechaInicio: fecha_inicio,
+      fechaFin: fecha_fin,
+      timeSlot,
+      excludeAppointmentId: null,
+    });
+
+    if (!validation.isValid) {
+      return res.status(400).json({
+        message: 'Error en la validación de la cita',
+        errors: validation.errors,
+      });
+    }
+
+    // 9. PREPARAR Y GUARDAR LA CITA (¡AHORA ES SEGURO!)
     const trazabilidad = [
       {
-        accion: "creacion",
+        accion: 'creacion',
         usuario: userId,
         fecha: new Date().toISOString(),
         detalles: {
-          estado: "pendiente",
-          motivo: reason || "",
-          notas: notes || "",
+          estado: 'pendiente',
+          motivo: reason || '',
+          notas: notes || '',
         },
       },
     ];
-    const { data, error } = await supabase.from("citas").insert([
-      {
-        id_usuario: userId,
-        id_mascota: petId,
-        id_clinica: clinicId,
-        id_servicio: serviceId,
-        fecha_inicio: date,
-        horario: timeSlot,
-        motivo: reason || "",
-        notas_adicionales: notes || "",
-        preferencia_recordatorio: reminderPreference || "both",
-        acepto_terminos: true,
-        estado: "pendiente",
-        created_at: new Date().toISOString(),
-        trazabilidad,
-      },
-    ]);
 
-    if (error) {
-      console.error("Error insertando cita:", error);
-      return res.status(500).json({ message: "Error al agendar cita" });
+    const { data: nuevaCita, error: errorInsert } = await supabase
+      .from('citas')
+      .insert([
+        {
+          id_usuario: userId,
+          id_mascota: petId,
+          id_clinica: clinicId,
+          id_servicio: serviceId,
+          fecha_inicio: fecha_inicio.toISOString(), // <-- Corregido
+          fecha_fin: fecha_fin.toISOString(), // <-- Añadido
+          horario: timeSlot, // <-- Mantenido por compatibilidad
+          motivo: reason || '',
+          notas_adicionales: notes || '',
+          preferencia_recordatorio: reminderPreference || 'both',
+          acepto_terminos: true,
+          estado: 'pendiente',
+          created_at: new Date().toISOString(),
+          trazabilidad,
+        },
+      ])
+      .select()
+      .single();
+
+    if (errorInsert) {
+      console.error('Error insertando cita:', errorInsert);
+      return res
+        .status(500)
+        .json({ message: 'Error al agendar cita', error: errorInsert.message });
     }
 
     return res
       .status(201)
-      .json({ message: "Cita creada exitosamente", cita: data?.[0] });
+      .json({ message: 'Cita creada exitosamente', cita: nuevaCita });
   } catch (error) {
-    console.error("Error general agendando cita:", error);
-    res.status(500).json({ message: "Error en el servidor" });
+    console.error('Error general agendando cita:', error);
+    res.status(500).json({ message: 'Error en el servidor' });
   }
 });
 
@@ -142,6 +223,7 @@ router.get("/appointments/user", async (req, res) => {
         id_cita,
         id_mascota,
         id_clinica,
+        id_servicio,
         fecha_inicio,
         horario,
         motivo,
@@ -149,12 +231,16 @@ router.get("/appointments/user", async (req, res) => {
         notas_adicionales,
         mascotas(nombre, foto_url),
         clinicas(nombre, direccion),
+        servicios(id_servicio, nombre),
         motivo_reprogramacion,
-        motivo_cancelacion
+        motivo_cancelacion,
+        payment_status,
+        payment_url,
+        payment_amount
       `
       )
       .eq("id_usuario", userId)
-      .order("fecha_inicio", { ascending: true });
+      .order("fecha_inicio", { ascending: false });
 
     if (error) {
       console.error("Error obteniendo citas:", error);
@@ -163,10 +249,14 @@ router.get("/appointments/user", async (req, res) => {
 
     const citasFormateadas = data.map((cita) => ({
       id: cita.id_cita,
+      petId: cita.id_mascota,
       petName: cita.mascotas?.nombre || "Mascota",
       petImage: cita.mascotas?.foto_url || "/placeholder.svg",
+      clinicId: cita.id_clinica,
       clinicName: cita.clinicas?.nombre || "Clínica veterinaria",
       clinicAddress: cita.clinicas?.direccion || "Dirección desconocida",
+      serviceId: cita.id_servicio,
+      serviceName: cita.servicios?.nombre || "Servicio no especificado",
       date: new Date(cita.fecha_inicio).toLocaleDateString("es-ES", {
         year: "numeric",
         month: "long",
@@ -183,16 +273,79 @@ router.get("/appointments/user", async (req, res) => {
           ? "cancelled"
           : cita.estado === "finalizada"
           ? "completed"
+          : cita.estado === "pagada"
+          ? "completed"
           : "unknown",
       notes: cita.notas_adicionales || "",
       motivo_reprogramacion: cita.motivo_reprogramacion || "",
       motivo_cancelacion: cita.motivo_cancelacion || "",
+      payment_status: cita.payment_status || "pending",
+      payment_url: cita.payment_url || null,
+      payment_amount: cita.payment_amount || null,
     }));
 
     res.status(200).json({ citas: citasFormateadas });
   } catch (error) {
     console.error("Error general trayendo citas:", error);
     res.status(500).json({ message: "Error en el servidor" });
+  }
+});
+
+// 🔥 Endpoint público para verificar disponibilidad de horarios en una fecha específica
+// Usado por el agendamiento de citas para mostrar slots disponibles
+router.get("/appointments/clinic/:clinicId/availability", async (req, res) => {
+  const { clinicId } = req.params;
+  const { date } = req.query; // Format: YYYY-MM-DD
+
+  // Validación de parámetros
+  if (!date) {
+    return res.status(400).json({
+      message: "El parámetro 'date' es requerido (formato: YYYY-MM-DD)"
+    });
+  }
+
+  // Validar formato de fecha
+  const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+  if (!dateRegex.test(date)) {
+    return res.status(400).json({
+      message: "El formato de fecha debe ser YYYY-MM-DD"
+    });
+  }
+
+  try {
+    // Construir el rango de fechas (todo el día)
+    const startOfDay = `${date}T00:00:00`;
+    const endOfDay = `${date}T23:59:59`;
+
+    // Obtener todas las citas activas para ese día en esa clínica
+    const { data: citas, error } = await supabase
+      .from("citas")
+      .select("id_cita, fecha_inicio, fecha_fin, estado")
+      .eq("id_clinica", clinicId)
+      .neq("estado", "cancelada")
+      .gte("fecha_inicio", startOfDay)
+      .lte("fecha_inicio", endOfDay)
+      .order("fecha_inicio", { ascending: true });
+
+    if (error) {
+      console.error("Error obteniendo disponibilidad:", error);
+      return res.status(500).json({
+        message: "Error al verificar disponibilidad",
+        error: error.message
+      });
+    }
+
+    res.status(200).json({
+      date,
+      clinicId: parseInt(clinicId),
+      citas: citas || [],
+    });
+  } catch (error) {
+    console.error("Error en endpoint de disponibilidad:", error);
+    res.status(500).json({
+      message: "Error interno del servidor",
+      error: error.message
+    });
   }
 });
 
@@ -417,6 +570,67 @@ router.put("/appointments/:appointmentId/status", async (req, res) => {
       });
     }
 
+    // 🔥 NUEVO: Si la cita se confirma, crear preferencia de pago
+    let paymentUrl = null;
+    if (status === "confirmada") {
+      try {
+        // Obtener información adicional necesaria para el pago
+        const { data: citaCompleta, error: errorCitaCompleta } = await supabase
+          .from("citas")
+          .select(`
+            id_cita,
+            id_usuario,
+            id_clinica,
+            servicios(nombre, precio),
+            usuarios(nombre, correo),
+            clinicas(nombre)
+          `)
+          .eq("id_cita", appointmentId)
+          .single();
+
+        if (errorCitaCompleta || !citaCompleta) {
+          console.warn("No se pudo obtener información completa de la cita para pago");
+        } else {
+          // Crear preferencia de pago usando el flujo simplificado (todos los pagos van a la cuenta de la plataforma)
+          const serviceAmount = parseFloat(citaCompleta.servicios.precio);
+
+          // Crear preferencia de pago
+          const preference = await MercadoPagoPreferenceService.createPreference({
+            appointmentId: citaCompleta.id_cita,
+            title: citaCompleta.servicios.nombre,
+            amount: serviceAmount,
+            payer: {
+              name: citaCompleta.usuarios.nombre,
+              email: citaCompleta.usuarios.correo,
+            },
+            clinic: {
+              id: citaCompleta.id_clinica,
+              nombre: citaCompleta.clinicas.nombre,
+            },
+          });
+
+          // Actualizar cita con información de pago
+          await supabase
+            .from("citas")
+            .update({
+              payment_status: 'awaiting_payment',
+              preference_id: preference.id,
+              payment_url: preference.init_point,
+              payment_amount: serviceAmount,
+            })
+            .eq("id_cita", appointmentId);
+
+          paymentUrl = preference.init_point;
+
+          console.log(`✅ Payment preference created for appointment ${appointmentId}`);
+        }
+      } catch (paymentError) {
+        console.error("Error creating payment preference:", paymentError);
+        // No bloqueamos la confirmación si falla el pago
+        // La cita se confirma de todas formas
+      }
+    }
+
     // TODO: Aquí se podría implementar el envío de notificaciones al cliente
 
     return res.status(200).json({
@@ -427,6 +641,7 @@ router.put("/appointments/:appointmentId/status", async (req, res) => {
           ? "rechazada"
           : "marcada para reprogramación"
       } exitosamente`,
+      payment_url: paymentUrl, // Incluir URL de pago si se creó
     });
   } catch (error) {
     console.error("Error general actualizando estado de cita:", error);
@@ -458,7 +673,7 @@ router.put("/appointments/:appointmentId/edit", async (req, res) => {
     // Verificar que la cita pertenezca al usuario
     const { data: cita, error: errorCita } = await supabase
       .from("citas")
-      .select("id_cita, id_usuario, trazabilidad")
+      .select("id_cita, id_usuario, id_clinica, id_servicio, fecha_inicio, horario, trazabilidad")
       .eq("id_cita", appointmentId)
       .eq("id_usuario", userId)
       .single();
@@ -470,14 +685,87 @@ router.put("/appointments/:appointmentId/edit", async (req, res) => {
     }
 
     const actualizacion = {};
+    let needsConflictCheck = false;
+    let newServiceId = serviceId || cita.id_servicio;
+    let newDate = date;
+    let newTimeSlot = timeSlot || cita.horario;
+
+    // Determinar si se cambió algo que requiera re-validación
+    if (date || timeSlot || serviceId) {
+      needsConflictCheck = true;
+    }
+
     if (petId) actualizacion.id_mascota = petId;
     if (serviceId) actualizacion.id_servicio = serviceId;
-    if (date) actualizacion.fecha_inicio = date;
-    if (timeSlot) actualizacion.horario = timeSlot;
     if (reason !== undefined) actualizacion.motivo = reason;
     if (notes !== undefined) actualizacion.notas_adicionales = notes;
     if (reminderPreference)
       actualizacion.preferencia_recordatorio = reminderPreference;
+
+    // Si cambió fecha, hora o servicio, recalcular fecha_inicio y fecha_fin
+    if (needsConflictCheck) {
+      // Obtener duración del servicio (nuevo o actual)
+      const { data: servicio, error: errorServicio } = await supabase
+        .from('servicios')
+        .select('duracion_minutos')
+        .eq('id_servicio', newServiceId)
+        .single();
+
+      if (errorServicio || !servicio) {
+        return res.status(404).json({ message: 'Servicio no encontrado' });
+      }
+
+      const duracion = servicio.duracion_minutos || 30;
+
+      // Usar la fecha nueva o la actual
+      const dateToUse = date || cita.fecha_inicio.split('T')[0];
+      const isoStartTime = `${dateToUse}T${newTimeSlot}:00`;
+      const fecha_inicio = new Date(isoStartTime);
+
+      // Validar formato
+      if (isNaN(fecha_inicio.getTime())) {
+        return res.status(400).json({
+          message: 'Formato de fecha u hora inválido. Use YYYY-MM-DD y HH:MM.',
+        });
+      }
+
+      // Validar que no sea en el pasado
+      if (fecha_inicio < new Date(Date.now() - 5 * 60000)) {
+        return res.status(400).json({
+          message: 'No se pueden agendar citas en el pasado.'
+        });
+      }
+
+      const fecha_fin = new Date(fecha_inicio.getTime() + duracion * 60000);
+
+      // Verificar conflictos
+      const { data: citasEnConflicto, error: errorConflicto } = await supabase
+        .from('citas')
+        .select('id_cita')
+        .eq('id_clinica', cita.id_clinica)
+        .neq('id_cita', appointmentId) // Excluir la cita actual
+        .neq('estado', 'cancelada')
+        .lt('fecha_inicio', fecha_fin.toISOString())
+        .gt('fecha_fin', fecha_inicio.toISOString());
+
+      if (errorConflicto) {
+        console.error('Error al verificar conflictos:', errorConflicto);
+        return res.status(500).json({
+          message: 'Error al verificar disponibilidad de la agenda'
+        });
+      }
+
+      if (citasEnConflicto && citasEnConflicto.length > 0) {
+        return res.status(409).json({
+          message: 'Conflicto de horario. La hora seleccionada ya no está disponible.',
+        });
+      }
+
+      // Actualizar fecha_inicio, fecha_fin y horario
+      actualizacion.fecha_inicio = fecha_inicio.toISOString();
+      actualizacion.fecha_fin = fecha_fin.toISOString();
+      actualizacion.horario = newTimeSlot;
+    }
 
     // Trazabilidad
     const nuevaTrazabilidad = Array.isArray(cita.trazabilidad)
@@ -617,7 +905,7 @@ router.put("/appointments/:appointmentId/reschedule", async (req, res) => {
     // Verificar que la cita pertenezca a la clínica
     const { data: cita, error: errorCita } = await supabase
       .from("citas")
-      .select("id_cita, id_clinica, trazabilidad")
+      .select("id_cita, id_clinica, id_servicio, trazabilidad, fecha_inicio, horario")
       .eq("id_cita", appointmentId)
       .eq("id_clinica", clinicaId)
       .single();
@@ -628,10 +916,64 @@ router.put("/appointments/:appointmentId/reschedule", async (req, res) => {
         .json({ message: "Cita no encontrada o no pertenece a la clínica" });
     }
 
+    // Obtener duración del servicio
+    const { data: servicio, error: errorServicio } = await supabase
+      .from('servicios')
+      .select('duracion_minutos')
+      .eq('id_servicio', cita.id_servicio)
+      .single();
+
+    if (errorServicio || !servicio) {
+      return res.status(404).json({ message: 'Servicio no encontrado' });
+    }
+
+    const duracion = servicio.duracion_minutos || 30;
+    const isoStartTime = `${date}T${timeSlot}:00`;
+    const fecha_inicio = new Date(isoStartTime);
+
+    if (isNaN(fecha_inicio.getTime())) {
+      return res.status(400).json({
+        message: 'Formato de fecha u hora inválido. Use YYYY-MM-DD y HH:MM.',
+      });
+    }
+
+    if (fecha_inicio < new Date(Date.now() - 5 * 60000)) {
+      return res.status(400).json({
+        message: 'No se pueden reprogramar citas en el pasado.'
+      });
+    }
+
+    const fecha_fin = new Date(fecha_inicio.getTime() + duracion * 60000);
+
+    // Verificar conflictos
+    const { data: citasEnConflicto, error: errorConflicto } = await supabase
+      .from('citas')
+      .select('id_cita')
+      .eq('id_clinica', clinicaId)
+      .neq('id_cita', appointmentId)
+      .neq('estado', 'cancelada')
+      .lt('fecha_inicio', fecha_fin.toISOString())
+      .gt('fecha_fin', fecha_inicio.toISOString());
+
+    if (errorConflicto) {
+      console.error('Error al verificar conflictos:', errorConflicto);
+      return res.status(500).json({
+        message: 'Error al verificar disponibilidad de la agenda'
+      });
+    }
+
+    if (citasEnConflicto && citasEnConflicto.length > 0) {
+      return res.status(409).json({
+        message: 'Conflicto de horario. La hora seleccionada ya no está disponible.',
+      });
+    }
+
     const actualizacion = {
-      fecha_inicio: date,
+      fecha_inicio: fecha_inicio.toISOString(),
+      fecha_fin: fecha_fin.toISOString(),
       horario: timeSlot,
       estado: "reprogramacion_sugerida",
+      motivo_reprogramacion: message || "Reprogramado por la clínica",
     };
 
     // Trazabilidad
@@ -639,13 +981,13 @@ router.put("/appointments/:appointmentId/reschedule", async (req, res) => {
       ? [...cita.trazabilidad]
       : [];
     nuevaTrazabilidad.push({
-      accion: "reprogramacion",
+      accion: "reprogramacion_clinica",
       usuario: clinicaId,
       fecha: new Date().toISOString(),
       detalles: {
         fecha_anterior: cita.fecha_inicio,
         horario_anterior: cita.horario,
-        nueva_fecha: date,
+        nueva_fecha: fecha_inicio.toISOString(),
         nuevo_horario: timeSlot,
         mensaje: message || "Reprogramado por la clínica",
       },
@@ -689,7 +1031,7 @@ router.patch("/appointment/:id/reschedule", async (req, res) => {
     // Validar que la cita exista y pertenezca al usuario
     const { data: existing, error: fetchError } = await supabase
       .from("citas")
-      .select("id_usuario, estado")
+      .select("id_usuario, estado, id_clinica, id_servicio, trazabilidad, fecha_inicio, horario")
       .eq("id_cita", appointmentId)
       .single();
 
@@ -701,18 +1043,95 @@ router.patch("/appointment/:id/reschedule", async (req, res) => {
       return res.status(403).json({ message: "No tienes permiso para modificar esta cita." });
     }
 
-    if (existing.estado === "cancelada" || existing.estado === "completada") {
-      return res.status(400).json({ message: "No se puede reprogramar una cita cancelada o completada." });
+    if (existing.estado === "cancelada" || existing.estado === "finalizada") {
+      return res.status(400).json({ message: "No se puede reprogramar una cita cancelada o finalizada." });
     }
 
+    // Obtener duración del servicio para calcular fecha_fin
+    const { data: servicio, error: errorServicio } = await supabase
+      .from('servicios')
+      .select('duracion_minutos')
+      .eq('id_servicio', existing.id_servicio)
+      .single();
+
+    if (errorServicio || !servicio) {
+      return res.status(404).json({ message: 'Servicio no encontrado' });
+    }
+
+    const duracion = servicio.duracion_minutos || 30;
+
+    // Calcular fecha_inicio y fecha_fin
+    const isoStartTime = `${date}T${time}:00`;
+    const fecha_inicio = new Date(isoStartTime);
+
+    // Validar formato de fecha/hora
+    if (isNaN(fecha_inicio.getTime())) {
+      return res.status(400).json({
+        message: 'Formato de fecha u hora inválido. Use YYYY-MM-DD y HH:MM.',
+      });
+    }
+
+    // Validar que la cita no sea en el pasado
+    if (fecha_inicio < new Date(Date.now() - 5 * 60000)) {
+      return res.status(400).json({
+        message: 'No se pueden reprogramar citas en el pasado.'
+      });
+    }
+
+    const fecha_fin = new Date(fecha_inicio.getTime() + duracion * 60000);
+
+    // Verificar conflictos de horario
+    const { data: citasEnConflicto, error: errorConflicto } = await supabase
+      .from('citas')
+      .select('id_cita')
+      .eq('id_clinica', existing.id_clinica)
+      .neq('id_cita', appointmentId) // Excluir la cita actual
+      .neq('estado', 'cancelada')
+      .lt('fecha_inicio', fecha_fin.toISOString())
+      .gt('fecha_fin', fecha_inicio.toISOString());
+
+    if (errorConflicto) {
+      console.error('Error al verificar conflictos:', errorConflicto);
+      return res.status(500).json({
+        message: 'Error al verificar disponibilidad de la agenda'
+      });
+    }
+
+    if (citasEnConflicto && citasEnConflicto.length > 0) {
+      return res.status(409).json({
+        message: 'Conflicto de horario. La hora seleccionada ya no está disponible.',
+      });
+    }
+
+    // Preparar trazabilidad
+    const nuevaTrazabilidad = Array.isArray(existing.trazabilidad)
+      ? [...existing.trazabilidad]
+      : [];
+
+    nuevaTrazabilidad.push({
+      accion: "reprogramacion_usuario",
+      usuario: userId,
+      fecha: new Date().toISOString(),
+      detalles: {
+        fecha_anterior: existing.fecha_inicio,
+        horario_anterior: existing.horario,
+        nueva_fecha: fecha_inicio.toISOString(),
+        nuevo_horario: time,
+        motivo: reason || "",
+      },
+    });
+
+    // Actualizar la cita
     const { error: updateError } = await supabase
       .from("citas")
       .update({
-        fecha_inicio: date,
+        fecha_inicio: fecha_inicio.toISOString(),
+        fecha_fin: fecha_fin.toISOString(),
         horario: time,
         motivo_reprogramacion: reason || null,
-        estado: "pendi",
-        created_at: new Date().toISOString(),
+        estado: "pendiente", // Corregido el typo "pendi"
+        trazabilidad: nuevaTrazabilidad,
+        // NO actualizamos created_at
       })
       .eq("id_cita", appointmentId);
 
