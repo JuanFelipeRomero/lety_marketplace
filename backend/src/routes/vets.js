@@ -853,9 +853,28 @@ router.get('/clinics', async (req, res) => {
         .json({ message: 'Error al obtener clínicas: ' + error.message });
     }
 
+    // Obtener las fotos principales de cada clínica
+    const clinicasConFotos = await Promise.all(
+      clinicas.map(async (clinica) => {
+        const { data: fotos, error: errorFotos } = await supabaseClient
+          .from('fotos_clinicas')
+          .select('id_foto, titulo, url, tipo, es_principal')
+          .eq('id_clinica', clinica.id_clinica)
+          .order('es_principal', { ascending: false })
+          .order('created_at', { ascending: false });
+
+        if (errorFotos) {
+          console.error(`Error obteniendo fotos para clínica ${clinica.id_clinica}:`, errorFotos);
+          return { ...clinica, photos: [] };
+        }
+
+        return { ...clinica, photos: fotos || [] };
+      })
+    );
+
     res.status(200).json({
       message: 'Clínicas obtenidas exitosamente',
-      clinicas,
+      clinicas: clinicasConFotos,
     });
   } catch (error) {
     console.error('Error interno al obtener clínicas:', error);

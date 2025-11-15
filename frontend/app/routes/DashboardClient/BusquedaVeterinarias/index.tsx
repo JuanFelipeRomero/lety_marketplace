@@ -166,7 +166,7 @@ export default function ClinicsPage() {
               certificado_url: clinic.certificado_url,
               latitud: clinic.latitud || undefined,
               longitud: clinic.longitud || undefined,
-              photos: [], // Inicializar array vacío para fotos
+              photos: clinic.photos || [], // Usar fotos que vienen del backend
               distance, // Usar la distancia calculada o undefined
               specialties: ["Consulta general", "Vacunación"], // Especialidades por defecto
               availability:
@@ -185,9 +185,6 @@ export default function ClinicsPage() {
           });
 
           setClinics(formattedClinics);
-
-          // Cargar fotos para cada clínica
-          loadClinicPhotos(formattedClinics);
         } else {
           setError("Formato de respuesta inesperado del servidor");
         }
@@ -203,32 +200,6 @@ export default function ClinicsPage() {
 
     fetchClinics();
   }, []);
-
-  // Función para cargar las fotos de cada clínica
-  const loadClinicPhotos = async (clinics: Clinic[]) => {
-    const updatedClinics = [...clinics];
-
-    for (const clinic of updatedClinics) {
-      try {
-        const response = await axios.get(
-          `${API_URL}/veterinary/photos/${clinic.id_clinica}`,
-          { headers: { Authorization: `Bearer ${token}` } }
-        );
-
-        if (response.data && response.data.fotos) {
-          clinic.photos = response.data.fotos.slice(0, 4); // Máximo 4 fotos
-        }
-      } catch (err) {
-        console.error(
-          `Error al cargar fotos para clínica ${clinic.id_clinica}:`,
-          err
-        );
-        // No interrumpir el flujo si falla una clínica
-      }
-    }
-
-    setClinics(updatedClinics);
-  };
 
   // Filtrar clínicas según los criterios seleccionados
   const filteredClinics = clinics.filter((clinic) => {
