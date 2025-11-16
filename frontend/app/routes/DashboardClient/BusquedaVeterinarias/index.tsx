@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import {
   Card,
   CardContent,
@@ -8,11 +8,11 @@ import {
 } from "~/components/ui/card";
 import { Button } from "~/components/ui/button";
 import { Input } from "~/components/ui/input";
-import { Slider } from "~/components/ui/slider";
 import { Checkbox } from "~/components/ui/checkbox";
 import { Label } from "~/components/ui/label";
 import { Badge } from "~/components/ui/badge";
-import { Search, MapPin, Star, Filter, Clock, Heart } from "lucide-react";
+import { Switch } from "~/components/ui/switch";
+import { Search, MapPin, Star, Filter, Clock, Heart, X } from "lucide-react";
 import { Link, useNavigate } from "react-router";
 import {
   Select,
@@ -24,7 +24,6 @@ import {
 import axios from "axios";
 import ClinicImageCarousel from "./ClinicImageCarousel";
 import ClinicDefaultImage from "./ClinicDefaultImage";
-import MapView from "./MapView";
 import config from "~/config";
 import { useAuthStore } from "~/stores/useAuthStore";
 
@@ -38,6 +37,36 @@ interface ClinicPhoto {
   created_at: string;
 }
 
+interface OpeningHours {
+  monday?: { open: string; close: string; is24Hours: boolean; closed: boolean };
+  tuesday?: {
+    open: string;
+    close: string;
+    is24Hours: boolean;
+    closed: boolean;
+  };
+  wednesday?: {
+    open: string;
+    close: string;
+    is24Hours: boolean;
+    closed: boolean;
+  };
+  thursday?: {
+    open: string;
+    close: string;
+    is24Hours: boolean;
+    closed: boolean;
+  };
+  friday?: { open: string; close: string; is24Hours: boolean; closed: boolean };
+  saturday?: {
+    open: string;
+    close: string;
+    is24Hours: boolean;
+    closed: boolean;
+  };
+  sunday?: { open: string; close: string; is24Hours: boolean; closed: boolean };
+}
+
 interface Clinic {
   id_clinica: number;
   nombre: string;
@@ -45,25 +74,24 @@ interface Clinic {
   telefono: string;
   correo: string;
   certificado_url?: string;
-  // Coordenadas
   latitud?: number;
   longitud?: number;
-  // Propiedades adicionales para UI y filtrado
-  photos?: ClinicPhoto[];
-  rating?: number;
-  reviews?: number;
-  distance?: string;
-  specialties?: string[];
-  availability?: string;
-  services?: string[];
-  openNow?: boolean;
-  price?: "$" | "$$" | "$$$";
-  petTypes?: string[];
-  featured?: boolean;
-  favorite?: boolean;
   detalles?: {
     especialidades?: string[];
+    instalaciones?: string[];
+    metodos_pago?: string[];
   };
+  // Datos enriquecidos desde backend
+  photos?: ClinicPhoto[];
+  averageRating?: number;
+  reviewCount?: number;
+  serviceCategories?: string[];
+  openingHours?: OpeningHours;
+  specialties?: string[];
+  facilities?: string[];
+  paymentMethods?: string[];
+  // UI state
+  favorite?: boolean;
 }
 
 export default function ClinicsPage() {
@@ -72,126 +100,55 @@ export default function ClinicsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [clinics, setClinics] = useState<Clinic[]>([]);
+
+  // Estados de filtros
   const [searchQuery, setSearchQuery] = useState("");
-  const [distance, setDistance] = useState([5]);
-  const [viewMode, setViewMode] = useState<"list" | "map">("list");
-  const [selectedPetTypes, setSelectedPetTypes] = useState<string[]>([]);
-  const mapContainerRef = useRef<HTMLDivElement>(null);
-  const [mapInitialized, setMapInitialized] = useState(false);
-  const initialRenderDone = useRef(false);
-  const [userLocation, setUserLocation] = useState<{
-    lat: number;
-    lng: number;
-  } | null>(null);
+  const [selectedServiceCategories, setSelectedServiceCategories] = useState<
+    string[]
+  >([]);
+  const [selectedSpecialties, setSelectedSpecialties] = useState<string[]>([]);
+  const [selectedFacilities, setSelectedFacilities] = useState<string[]>([]);
+  const [selectedPaymentMethods, setSelectedPaymentMethods] = useState<
+    string[]
+  >([]);
+  const [minRating, setMinRating] = useState<number>(0);
+  const [showOpenNow, setShowOpenNow] = useState(false);
+  const [sortBy, setSortBy] = useState<"name" | "rating">("name");
 
-    const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3001";
+  const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3001";
 
-  // Initialize the map with a delay to ensure DOM is fully rendered
+  // Obtener opciones únicas de filtros desde los datos
+  const allServiceCategories = Array.from(
+    new Set(clinics.flatMap((c) => c.serviceCategories || [])),
+  ).sort();
+
+  const allSpecialties = Array.from(
+    new Set(clinics.flatMap((c) => c.specialties || [])),
+  ).sort();
+
+  const allFacilities = Array.from(
+    new Set(clinics.flatMap((c) => c.facilities || [])),
+  ).sort();
+
+  const allPaymentMethods = Array.from(
+    new Set(clinics.flatMap((c) => c.paymentMethods || [])),
+  ).sort();
+
   useEffect(() => {
-    if (!initialRenderDone.current) {
-      initialRenderDone.current = true;
-
-      // Delay initialization to ensure DOM is ready
-      const timer = setTimeout(() => {
-        console.log("Delayed map initialization");
-        setMapInitialized(true);
-      }, 500);
-
-      return () => clearTimeout(timer);
-    }
-  }, []);
-
-  useEffect(() => {
-    // Función para cargar las clínicas desde el backend
     const fetchClinics = async () => {
       try {
         setLoading(true);
         const response = await axios.get(`${API_URL}/clinics`);
 
         if (response.data && response.data.clinicas) {
-          // Función para calcular la distancia entre dos puntos usando la fórmula de Haversine
-          const calculateDistance = (
-            lat1: number,
-            lon1: number,
-            lat2: number,
-            lon2: number
-          ) => {
-            const R = 6371; // Radio de la Tierra en km
-            const dLat = (lat2 - lat1) * (Math.PI / 180);
-            const dLon = (lon2 - lon1) * (Math.PI / 180);
-            const a =
-              Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-              Math.cos(lat1 * (Math.PI / 180)) *
-                Math.cos(lat2 * (Math.PI / 180)) *
-                Math.sin(dLon / 2) *
-                Math.sin(dLon / 2);
-            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-            return R * c; // Distancia en km
-          };
-
-          // Obtener la ubicación del usuario
-          if (navigator.geolocation) {
-            navigator.geolocation.getCurrentPosition(
-              (position) => {
-                setUserLocation({
-                  lat: position.coords.latitude,
-                  lng: position.coords.longitude,
-                });
-              },
-              (error) => {
-                console.error("Error al obtener la ubicación:", error);
-              }
-            );
-          }
-
-          // Transformar los datos del backend al formato que espera nuestra UI
-          const formattedClinics = response.data.clinicas.map((clinic: any) => {
-            let distance = undefined;
-            if (userLocation && clinic.latitud && clinic.longitud) {
-              const dist = calculateDistance(
-                userLocation.lat,
-                userLocation.lng,
-                clinic.latitud,
-                clinic.longitud
-              );
-              distance = `${dist.toFixed(1)} km`;
-            }
-
-            return {
-              id_clinica: clinic.id_clinica,
-              nombre: clinic.nombre,
-              direccion: clinic.direccion,
-              telefono: clinic.telefono,
-              correo: clinic.correo,
-              certificado_url: clinic.certificado_url,
-              latitud: clinic.latitud || undefined,
-              longitud: clinic.longitud || undefined,
-              photos: clinic.photos || [], // Usar fotos que vienen del backend
-              distance, // Usar la distancia calculada o undefined
-              specialties: ["Consulta general", "Vacunación"], // Especialidades por defecto
-              availability:
-                Math.random() > 0.3
-                  ? "Abierto ahora • Cierra a las 18:00"
-                  : "Cerrado • Abre mañana a las 9:00",
-              openNow: Math.random() > 0.3, // Aleatoriamente abierto o cerrado
-              price: ["$", "$$", "$$$"][Math.floor(Math.random() * 3)] as
-                | "$"
-                | "$$"
-                | "$$$", // Precio aleatorio
-              petTypes: clinic.detalles?.especialidades || ["Perros", "Gatos"],
-              featured: false,
-              favorite: Math.random() > 0.8, // Algunas clínicas favoritas
-            };
-          });
-
-          setClinics(formattedClinics);
+          setClinics(response.data.clinicas);
         } else {
           setError("Formato de respuesta inesperado del servidor");
         }
       } catch (err) {
         console.error("Error al obtener las clínicas:", err);
         setError(
-          "Error al cargar las clínicas veterinarias. Por favor, intenta de nuevo."
+          "Error al cargar las clínicas veterinarias. Por favor, intenta de nuevo.",
         );
       } finally {
         setLoading(false);
@@ -201,79 +158,198 @@ export default function ClinicsPage() {
     fetchClinics();
   }, []);
 
-  // Filtrar clínicas según los criterios seleccionados
-  const filteredClinics = clinics.filter((clinic) => {
-    // Filtro por búsqueda
-    const matchesSearch =
-      searchQuery === "" ||
-      clinic.nombre.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      clinic.direccion.toLowerCase().includes(searchQuery.toLowerCase());
+  // Función para verificar si una clínica está abierta ahora
+  const isOpenNow = (clinic: Clinic): boolean => {
+    if (!clinic.openingHours) return false;
 
-    // Filtro por distancia (si la distancia está disponible)
-    const clinicDistance = clinic.distance ? parseFloat(clinic.distance) : 0;
-    const matchesDistance = clinicDistance <= distance[0];
+    const now = new Date();
+    const dayNames = [
+      "sunday",
+      "monday",
+      "tuesday",
+      "wednesday",
+      "thursday",
+      "friday",
+      "saturday",
+    ];
+    const currentDay = dayNames[now.getDay()] as keyof OpeningHours;
+    const currentTime = now.toTimeString().slice(0, 5); // "HH:MM"
 
-    // Filtro por tipos de mascotas
-    const matchesPetTypes =
-      selectedPetTypes.length === 0 ||
-      (clinic.petTypes &&
-        selectedPetTypes.some((p) => clinic.petTypes?.includes(p)));
+    const todaySchedule = clinic.openingHours[currentDay];
+    if (!todaySchedule || todaySchedule.closed) return false;
+    if (todaySchedule.is24Hours) return true;
 
-    return matchesSearch && matchesDistance && matchesPetTypes;
-  });
+    return (
+      currentTime >= todaySchedule.open && currentTime <= todaySchedule.close
+    );
+  };
 
-  const handlePetTypeChange = (petType: string, checked: boolean) => {
-    if (checked) {
-      setSelectedPetTypes([...selectedPetTypes, petType]);
+  // Función para obtener el texto de disponibilidad
+  const getAvailabilityText = (clinic: Clinic): string => {
+    if (!clinic.openingHours) return "Horario no disponible";
+
+    const now = new Date();
+    const dayNames = [
+      "sunday",
+      "monday",
+      "tuesday",
+      "wednesday",
+      "thursday",
+      "friday",
+      "saturday",
+    ];
+    const currentDay = dayNames[now.getDay()] as keyof OpeningHours;
+
+    const todaySchedule = clinic.openingHours[currentDay];
+    if (!todaySchedule) return "Horario no disponible";
+    if (todaySchedule.closed) return "Cerrado hoy";
+    if (todaySchedule.is24Hours) return "Abierto 24 horas";
+
+    const isOpen = isOpenNow(clinic);
+    if (isOpen) {
+      return `Abierto ahora • Cierra a las ${todaySchedule.close}`;
     } else {
-      setSelectedPetTypes(selectedPetTypes.filter((p) => p !== petType));
+      return `Cerrado • Abre a las ${todaySchedule.open}`;
+    }
+  };
+
+  // Filtrar clínicas según los criterios seleccionados
+  const filteredClinics = clinics
+    .filter((clinic) => {
+      // Filtro por búsqueda (nombre o dirección)
+      const matchesSearch =
+        searchQuery === "" ||
+        clinic.nombre.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        clinic.direccion.toLowerCase().includes(searchQuery.toLowerCase());
+
+      // Filtro por categorías de servicio
+      const matchesServiceCategory =
+        selectedServiceCategories.length === 0 ||
+        (clinic.serviceCategories &&
+          selectedServiceCategories.some((cat) =>
+            clinic.serviceCategories?.includes(cat),
+          ));
+
+      // Filtro por especialidades (tipos de mascotas)
+      const matchesSpecialty =
+        selectedSpecialties.length === 0 ||
+        (clinic.specialties &&
+          selectedSpecialties.some((spec) =>
+            clinic.specialties?.includes(spec),
+          ));
+
+      // Filtro por instalaciones
+      const matchesFacility =
+        selectedFacilities.length === 0 ||
+        (clinic.facilities &&
+          selectedFacilities.some((fac) => clinic.facilities?.includes(fac)));
+
+      // Filtro por métodos de pago
+      const matchesPayment =
+        selectedPaymentMethods.length === 0 ||
+        (clinic.paymentMethods &&
+          selectedPaymentMethods.some((pm) =>
+            clinic.paymentMethods?.includes(pm),
+          ));
+
+      // Filtro por calificación mínima
+      const matchesRating =
+        minRating === 0 ||
+        (clinic.averageRating && clinic.averageRating >= minRating);
+
+      // Filtro por "abierto ahora"
+      const matchesOpenNow = !showOpenNow || isOpenNow(clinic);
+
+      return (
+        matchesSearch &&
+        matchesServiceCategory &&
+        matchesSpecialty &&
+        matchesFacility &&
+        matchesPayment &&
+        matchesRating &&
+        matchesOpenNow
+      );
+    })
+    .sort((a, b) => {
+      if (sortBy === "rating") {
+        return (b.averageRating || 0) - (a.averageRating || 0);
+      }
+      return a.nombre.localeCompare(b.nombre);
+    });
+
+  // Manejadores de filtros
+  const handleServiceCategoryChange = (category: string, checked: boolean) => {
+    if (checked) {
+      setSelectedServiceCategories([...selectedServiceCategories, category]);
+    } else {
+      setSelectedServiceCategories(
+        selectedServiceCategories.filter((c) => c !== category),
+      );
+    }
+  };
+
+  const handleSpecialtyChange = (specialty: string, checked: boolean) => {
+    if (checked) {
+      setSelectedSpecialties([...selectedSpecialties, specialty]);
+    } else {
+      setSelectedSpecialties(
+        selectedSpecialties.filter((s) => s !== specialty),
+      );
+    }
+  };
+
+  const handleFacilityChange = (facility: string, checked: boolean) => {
+    if (checked) {
+      setSelectedFacilities([...selectedFacilities, facility]);
+    } else {
+      setSelectedFacilities(selectedFacilities.filter((f) => f !== facility));
+    }
+  };
+
+  const handlePaymentMethodChange = (method: string, checked: boolean) => {
+    if (checked) {
+      setSelectedPaymentMethods([...selectedPaymentMethods, method]);
+    } else {
+      setSelectedPaymentMethods(
+        selectedPaymentMethods.filter((m) => m !== method),
+      );
     }
   };
 
   const clearFilters = () => {
     setSearchQuery("");
-    setDistance([5]);
-    setSelectedPetTypes([]);
+    setSelectedServiceCategories([]);
+    setSelectedSpecialties([]);
+    setSelectedFacilities([]);
+    setSelectedPaymentMethods([]);
+    setMinRating(0);
+    setShowOpenNow(false);
+  };
+
+  const getActiveFiltersCount = () => {
+    let count = 0;
+    if (selectedServiceCategories.length > 0) count++;
+    if (selectedSpecialties.length > 0) count++;
+    if (selectedFacilities.length > 0) count++;
+    if (selectedPaymentMethods.length > 0) count++;
+    if (minRating > 0) count++;
+    if (showOpenNow) count++;
+    return count;
   };
 
   const toggleFavorite = (id: number) => {
     // En una aplicación real, esto enviaría una solicitud al servidor
     console.log(`Toggling favorite for clinic ${id}`);
 
-    // Actualizar estado local para UI
     setClinics(
       clinics.map((clinic) => {
         if (clinic.id_clinica === id) {
           return { ...clinic, favorite: !clinic.favorite };
         }
         return clinic;
-      })
+      }),
     );
   };
-
-  // Función para iniciar el proceso de programación de citas
-  const handleScheduleAppointment = (clinicId: number) => {
-    navigate(`/pet-dashboard/appointments/schedule?clinic=${clinicId}`);
-  };
-
-  // Manejar la selección de una clínica desde el mapa
-  const handleClinicSelect = (clinicId: number) => {
-    // Buscar la clínica seleccionada
-    const selectedClinic = clinics.find(
-      (clinic) => clinic.id_clinica === clinicId
-    );
-    if (selectedClinic) {
-      // Podemos redirigir a la vista de detalle o realizar alguna acción
-      navigate(`/pet-dashboard/clinics/${clinicId}`);
-    }
-  };
-
-  useEffect(() => {
-    // Initialize map once on component mount
-    if (!mapInitialized) {
-      setMapInitialized(true);
-    }
-  }, [mapInitialized]);
 
   // Mostrar mensaje de carga o error
   if (loading) {
@@ -304,7 +380,6 @@ export default function ClinicsPage() {
   const renderClinicImage = (clinic: Clinic) => {
     const hasPhotos = clinic.photos && clinic.photos.length > 0;
 
-    // Elemento de "favorito" que se mostrará sobre la imagen
     const favoriteButton = (
       <Button
         variant="ghost"
@@ -319,9 +394,6 @@ export default function ClinicsPage() {
         />
       </Button>
     );
-
-    // Badge de "destacado" que se mostrará sobre la imagen
-    const featuredBadge = null;
 
     if (hasPhotos) {
       return (
@@ -353,22 +425,14 @@ export default function ClinicsPage() {
         <h1 className="text-2xl font-bold tracking-tight">
           Buscar Veterinarias
         </h1>
-        <div className="flex gap-2">
-          <Button
-            variant={viewMode === "list" ? "default" : "outline"}
-            size="sm"
-            onClick={() => setViewMode("list")}
-          >
-            Lista
-          </Button>
-          <Button
-            variant={viewMode === "map" ? "default" : "outline"}
-            size="sm"
-            onClick={() => setViewMode("map")}
-          >
-            Mapa
-          </Button>
-        </div>
+        {getActiveFiltersCount() > 0 && (
+          <Badge variant="secondary">
+            {getActiveFiltersCount()}{" "}
+            {getActiveFiltersCount() === 1
+              ? "filtro activo"
+              : "filtros activos"}
+          </Badge>
+        )}
       </div>
 
       {/* Barra de búsqueda principal */}
@@ -377,41 +441,18 @@ export default function ClinicsPage() {
           <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
           <Input
             type="search"
-            placeholder="Buscar por nombre, dirección o especialidad..."
+            placeholder="Buscar por nombre o dirección..."
             className="pl-8"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
           />
         </div>
-        <div className="flex gap-2">
-          <Select
-            value={selectedPetTypes.join(",")}
-            onValueChange={(values) => setSelectedPetTypes(values.split(","))}
-          >
-            <SelectTrigger className="w-[130px]">
-              <SelectValue placeholder="Tipo de mascota" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="Perros">Perros</SelectItem>
-              <SelectItem value="Gatos">Gatos</SelectItem>
-              <SelectItem value="Aves">Aves</SelectItem>
-              <SelectItem value="Exóticos">Exóticos</SelectItem>
-              <SelectItem value="Reptiles">Reptiles</SelectItem>
-              <SelectItem value="Pequeños mamíferos">
-                Pequeños mamíferos
-              </SelectItem>
-            </SelectContent>
-          </Select>
-
-          <Button
-            variant="outline"
-            size="icon"
-            onClick={clearFilters}
-            title="Limpiar filtros"
-          >
-            <Filter className="h-4 w-4" />
+        {getActiveFiltersCount() > 0 && (
+          <Button variant="outline" onClick={clearFilters} className="gap-2">
+            <X className="h-4 w-4" />
+            Limpiar filtros
           </Button>
-        </div>
+        )}
       </div>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-4">
@@ -419,56 +460,175 @@ export default function ClinicsPage() {
         <div className="lg:col-span-1">
           <Card>
             <CardHeader>
-              <CardTitle>Filtros</CardTitle>
+              <CardTitle className="flex items-center justify-between">
+                Filtros
+                <Filter className="h-4 w-4" />
+              </CardTitle>
             </CardHeader>
             <CardContent className="space-y-6">
+              {/* Filtro: Abierto Ahora */}
               <div className="space-y-2">
-                <h3 className="text-sm font-medium">Distancia máxima</h3>
-                <div className="space-y-4">
-                  <div>
-                    <div className="mb-2 flex justify-between">
-                      <span className="text-sm">Distancia</span>
-                      <span className="text-sm font-medium">
-                        {distance[0]} km
-                      </span>
-                    </div>
-                    <Slider
-                      value={distance}
-                      min={1}
-                      max={20}
-                      step={1}
-                      onValueChange={setDistance}
-                    />
-                  </div>
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="open-now" className="text-sm font-medium">
+                    Abierto ahora
+                  </Label>
+                  <Switch
+                    id="open-now"
+                    checked={showOpenNow}
+                    onCheckedChange={setShowOpenNow}
+                  />
                 </div>
               </div>
 
+              {/* Filtro: Calificación */}
               <div className="space-y-2">
-                <h3 className="text-sm font-medium">Tipo de mascotas</h3>
+                <h3 className="text-sm font-medium">Calificación mínima</h3>
                 <div className="space-y-2">
-                  {[
-                    "Perros",
-                    "Gatos",
-                    "Aves",
-                    "Exóticos",
-                    "Reptiles",
-                    "Pequeños mamíferos",
-                  ].map((petType) => (
-                    <div key={petType} className="flex items-center space-x-2">
+                  {[4, 3, 2, 0].map((rating) => (
+                    <div key={rating} className="flex items-center space-x-2">
                       <Checkbox
-                        id={`pet-${petType}`}
-                        checked={selectedPetTypes.includes(petType)}
+                        id={`rating-${rating}`}
+                        checked={minRating === rating}
                         onCheckedChange={(checked) =>
-                          handlePetTypeChange(petType, checked as boolean)
+                          setMinRating(checked ? rating : 0)
                         }
                       />
-                      <Label htmlFor={`pet-${petType}`} className="text-sm">
-                        {petType}
+                      <Label
+                        htmlFor={`rating-${rating}`}
+                        className="text-sm flex items-center gap-1"
+                      >
+                        {rating === 0 ? (
+                          "Todas"
+                        ) : (
+                          <>
+                            {rating}+{" "}
+                            <Star className="h-3 w-3 fill-yellow-400 text-yellow-400" />
+                          </>
+                        )}
                       </Label>
                     </div>
                   ))}
                 </div>
               </div>
+
+              {/* Filtro: Categoría de Servicio */}
+              {allServiceCategories.length > 0 && (
+                <div className="space-y-2">
+                  <h3 className="text-sm font-medium">Servicios</h3>
+                  <div className="space-y-2 max-h-48 overflow-y-auto">
+                    {allServiceCategories.map((category) => (
+                      <div
+                        key={category}
+                        className="flex items-center space-x-2"
+                      >
+                        <Checkbox
+                          id={`service-${category}`}
+                          checked={selectedServiceCategories.includes(category)}
+                          onCheckedChange={(checked) =>
+                            handleServiceCategoryChange(
+                              category,
+                              checked as boolean,
+                            )
+                          }
+                        />
+                        <Label
+                          htmlFor={`service-${category}`}
+                          className="text-sm"
+                        >
+                          {category}
+                        </Label>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Filtro: Especialidades (Tipos de Mascotas) */}
+              {allSpecialties.length > 0 && (
+                <div className="space-y-2">
+                  <h3 className="text-sm font-medium">Tipo de mascotas</h3>
+                  <div className="space-y-2">
+                    {allSpecialties.map((specialty) => (
+                      <div
+                        key={specialty}
+                        className="flex items-center space-x-2"
+                      >
+                        <Checkbox
+                          id={`specialty-${specialty}`}
+                          checked={selectedSpecialties.includes(specialty)}
+                          onCheckedChange={(checked) =>
+                            handleSpecialtyChange(specialty, checked as boolean)
+                          }
+                        />
+                        <Label
+                          htmlFor={`specialty-${specialty}`}
+                          className="text-sm"
+                        >
+                          {specialty}
+                        </Label>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Filtro: Instalaciones */}
+              {allFacilities.length > 0 && (
+                <div className="space-y-2">
+                  <h3 className="text-sm font-medium">Instalaciones</h3>
+                  <div className="space-y-2 max-h-48 overflow-y-auto">
+                    {allFacilities.map((facility) => (
+                      <div
+                        key={facility}
+                        className="flex items-center space-x-2"
+                      >
+                        <Checkbox
+                          id={`facility-${facility}`}
+                          checked={selectedFacilities.includes(facility)}
+                          onCheckedChange={(checked) =>
+                            handleFacilityChange(facility, checked as boolean)
+                          }
+                        />
+                        <Label
+                          htmlFor={`facility-${facility}`}
+                          className="text-sm"
+                        >
+                          {facility}
+                        </Label>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Filtro: Métodos de Pago */}
+              {allPaymentMethods.length > 0 && (
+                <div className="space-y-2">
+                  <h3 className="text-sm font-medium">Métodos de pago</h3>
+                  <div className="space-y-2">
+                    {allPaymentMethods.map((method) => (
+                      <div key={method} className="flex items-center space-x-2">
+                        <Checkbox
+                          id={`payment-${method}`}
+                          checked={selectedPaymentMethods.includes(method)}
+                          onCheckedChange={(checked) =>
+                            handlePaymentMethodChange(
+                              method,
+                              checked as boolean,
+                            )
+                          }
+                        />
+                        <Label
+                          htmlFor={`payment-${method}`}
+                          className="text-sm"
+                        >
+                          {method}
+                        </Label>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </CardContent>
             <CardFooter>
               <Button
@@ -484,10 +644,7 @@ export default function ClinicsPage() {
 
         {/* Resultados */}
         <div className="lg:col-span-3">
-          {/* List View - Hidden when map view is active */}
-          <div
-            className={`space-y-4 ${viewMode === "map" ? "hidden" : "block"}`}
-          >
+          <div className="space-y-4">
             {filteredClinics.length === 0 ? (
               <Card className="p-8 text-center">
                 <div className="mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-full bg-muted">
@@ -511,14 +668,18 @@ export default function ClinicsPage() {
                     {filteredClinics.length === 1 ? "resultado" : "resultados"}{" "}
                     encontrados
                   </p>
-                  <Select defaultValue="distance">
+                  <Select
+                    value={sortBy}
+                    onValueChange={(value) =>
+                      setSortBy(value as "name" | "rating")
+                    }
+                  >
                     <SelectTrigger className="w-[180px]">
                       <SelectValue placeholder="Ordenar por" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="distance">
-                        Distancia: más cercanos
-                      </SelectItem>
+                      <SelectItem value="name">Nombre (A-Z)</SelectItem>
+                      <SelectItem value="rating">Mejor calificadas</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -534,55 +695,78 @@ export default function ClinicsPage() {
                             <h3 className="text-lg font-semibold">
                               {clinic.nombre}
                             </h3>
-                            {/* Comentado temporalmente hasta que se implemente el sistema de ratings
-                            <div className="flex items-center">
-                              <Star className="mr-1 h-4 w-4 fill-yellow-400 text-yellow-400" />
-                              <span className="text-sm font-medium">
-                                {clinic.rating}
-                              </span>
-                              <span className="ml-1 text-xs text-muted-foreground">
-                                ({clinic.reviews})
-                              </span>
-                            </div>
-                            */}
+                            {clinic.averageRating !== undefined &&
+                              clinic.reviewCount !== undefined &&
+                              clinic.reviewCount > 0 && (
+                                <div className="flex items-center">
+                                  <Star className="mr-1 h-4 w-4 fill-yellow-400 text-yellow-400" />
+                                  <span className="text-sm font-medium">
+                                    {clinic.averageRating.toFixed(1)}
+                                  </span>
+                                  <span className="ml-1 text-xs text-muted-foreground">
+                                    ({clinic.reviewCount})
+                                  </span>
+                                </div>
+                              )}
                           </div>
 
                           <div className="mb-2 flex items-center text-sm text-muted-foreground">
                             <MapPin className="mr-1 h-4 w-4" />
-                            <span>
-                              {clinic.distance ? `${clinic.distance} • ` : ""}
-                              {clinic.direccion}
+                            <span>{clinic.direccion}</span>
+                          </div>
+
+                          <div className="mb-2 flex items-center text-sm">
+                            <Clock className="mr-1 h-4 w-4" />
+                            <span
+                              className={
+                                isOpenNow(clinic)
+                                  ? "text-green-600 font-medium"
+                                  : "text-muted-foreground"
+                              }
+                            >
+                              {getAvailabilityText(clinic)}
                             </span>
                           </div>
 
-                          <div className="mb-2 flex items-center text-sm text-muted-foreground">
-                            <Clock className="mr-1 h-4 w-4" />
-                            <span>{clinic.availability}</span>
-                          </div>
+                          {clinic.serviceCategories &&
+                            clinic.serviceCategories.length > 0 && (
+                              <div className="mb-3 flex flex-wrap gap-1">
+                                {clinic.serviceCategories
+                                  .slice(0, 3)
+                                  .map((category) => (
+                                    <Badge
+                                      key={category}
+                                      variant="secondary"
+                                      className="text-xs"
+                                    >
+                                      {category}
+                                    </Badge>
+                                  ))}
+                                {clinic.serviceCategories.length > 3 && (
+                                  <Badge
+                                    variant="secondary"
+                                    className="text-xs"
+                                  >
+                                    +{clinic.serviceCategories.length - 3} más
+                                  </Badge>
+                                )}
+                              </div>
+                            )}
 
-                          <div className="mb-3 flex flex-wrap gap-1">
-                            {clinic.specialties?.map((specialty) => (
-                              <Badge
-                                key={specialty}
-                                variant="secondary"
-                                className="text-xs"
-                              >
-                                {specialty}
-                              </Badge>
-                            ))}
-                          </div>
-
-                          <div className="mb-3 flex flex-wrap gap-1">
-                            {clinic.petTypes?.map((petType) => (
-                              <Badge
-                                key={petType}
-                                variant="outline"
-                                className="text-xs"
-                              >
-                                {petType}
-                              </Badge>
-                            ))}
-                          </div>
+                          {clinic.specialties &&
+                            clinic.specialties.length > 0 && (
+                              <div className="mb-3 flex flex-wrap gap-1">
+                                {clinic.specialties.map((specialty) => (
+                                  <Badge
+                                    key={specialty}
+                                    variant="outline"
+                                    className="text-xs"
+                                  >
+                                    {specialty}
+                                  </Badge>
+                                ))}
+                              </div>
+                            )}
 
                           <div className="mt-auto flex items-center justify-between">
                             <div className="flex gap-2">
@@ -608,23 +792,6 @@ export default function ClinicsPage() {
                   </Card>
                 ))}
               </>
-            )}
-          </div>
-
-          {/* Map View - Only load MapView component when needed */}
-          <div
-            ref={mapContainerRef}
-            className={`overflow-hidden rounded-lg shadow-sm ${
-              viewMode === "list" ? "hidden" : "block"
-            }`}
-            style={{ height: "calc(100vh - 250px)", minHeight: "500px" }}
-          >
-            {mapInitialized && (
-              <MapView
-                clinics={filteredClinics}
-                onClinicSelect={handleClinicSelect}
-                isMapViewActive={viewMode === "map"}
-              />
             )}
           </div>
         </div>
