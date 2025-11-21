@@ -454,9 +454,9 @@ export function PetOwnerSignup({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[425px]">
+      <DialogContent className="sm:max-w-[425px] max-h-[90vh] flex flex-col">
         <DialogHeader>
-          <div className="flex items-center">
+          <div className="flex-shrink-0">
             {step === 2 && (
               <Button
                 variant="ghost"
@@ -481,9 +481,9 @@ export function PetOwnerSignup({
           </div>
         </DialogHeader>
 
-        <form onSubmit={handleSubmit(onSubmit)}>
+        <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col max-h-full overflow-hidden gap-2">
           {step === 1 ? (
-            <div className="grid gap-4 py-4">
+            <div className="overflow-y-auto flex-1 px-1">
               <div className="grid gap-2">
                 <Label htmlFor="userName">Nombre y Apellido</Label>
                 <div className="relative">
@@ -502,7 +502,7 @@ export function PetOwnerSignup({
                 )}
               </div>
 
-              <div className="grid gap-2">
+              <div className="grid gap-2 mt-2">
                 <Label htmlFor="email">Correo electrónico</Label>
                 <div className="relative">
                   <Mail className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
@@ -519,7 +519,7 @@ export function PetOwnerSignup({
                 )}
               </div>
 
-              <div className="grid gap-2">
+              <div className="grid gap-2 mt-2">
                 <Label htmlFor="phone">Telefono</Label>
                 <div className="relative">
                   <Mail className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
@@ -536,7 +536,7 @@ export function PetOwnerSignup({
                 )}
               </div>
 
-              <div className="grid gap-2">
+              <div className="grid gap-2 mt-2">
                 <Label htmlFor="password">Contraseña</Label>
                 <div className="relative">
                   <Lock className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
@@ -585,8 +585,8 @@ export function PetOwnerSignup({
               )}
             </div>
           ) : (
-            <div className="grid gap-4 py-4">
-              <div className="grid gap-2">
+            <div className="overflow-y-auto flex-1 px-1">
+              <div className="grid gap-4">
                 <Label htmlFor="petName">Nombre de tu mascota</Label>
                 <div className="relative">
                   <Paw className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
@@ -804,7 +804,7 @@ export function PetOwnerSignup({
             </div>
           )}
 
-          <DialogFooter>
+          <DialogFooter className="mt-4">
             <Button type="button" variant="outline" onClick={onBack}>
               Volver
             </Button>
@@ -825,6 +825,7 @@ export function PetOwnerSignup({
             )}
           </DialogFooter>
         </form>
+
       </DialogContent>
       <StatusDialog
         open={statusDialog.open}
